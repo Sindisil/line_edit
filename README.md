@@ -1,5 +1,5 @@
 # lned
-Acutally useful line editor -- essentially an extended *nix ed.
+Acutally useful line editor -- similar to an extended *nix ed.
 
 My intent is to use the project to acomplish several goals:
 
@@ -28,5 +28,5 @@ the pain points I experience using it.
 My hope is that lned will actually become a useful development tool,
 though I suspect that the line-based nature will put an upper bound
 on how productive it will feel. Perhaps, if I'm still interested, I
-will then move on to writing a screen based (or even graphical)
-version.
+will then move on to writing a screen based editor, either terminal
+mode or perhaps full GUI.
