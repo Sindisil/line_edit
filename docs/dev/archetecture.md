@@ -55,9 +55,13 @@ monitor files for change/delete, updating prompt accordingly.
 #### File saving
 
 https://stackoverflow.com/questions/18260899/adequetely-safe-method-of-overwriting-a-save-file
+
 https://danluu.com/file-consistency/
+
 https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilea?redirectedfrom=MSDN
+
 https://stackoverflow.com/questions/1812115/how-to-safely-write-to-a-file
+
 https://stackoverflow.com/questions/18260899/adequetely-safe-method-of-overwriting-a-save-file
 
 Files are hard.
