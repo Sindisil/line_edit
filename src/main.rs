@@ -1,5 +1,6 @@
 mod cli;
 mod main_loop;
+mod edit_buffer;
 
 fn main() {
     let stdout = std::io::stdout();
