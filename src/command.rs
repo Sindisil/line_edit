@@ -20,8 +20,10 @@ impl fmt::Display for Error {
     }
 }
 
-pub fn parse_command(input: &str) -> Result<Command, Error> {
-    Err(Error::Unknown(input.to_string()))
+impl Command {
+    pub fn parse(input: &str) -> Result<Command, Error> {
+        Err(Error::Unknown(input.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -31,7 +33,7 @@ mod tests {
     #[test]
     fn parse_unknown_command_gives_error() {
         let input = "o";
-        let res = parse_command(&input);
+        let res = Command::parse(&input);
         assert_eq!(res, Err(Error::Unknown(input.to_string())));
     }
 }
