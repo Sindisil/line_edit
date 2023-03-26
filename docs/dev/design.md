@@ -16,7 +16,6 @@ should be the overarching design focus for lned.
 
 This document is intended to flesh out the design of lned using pseudocode.
 
-
 ## Data Types
 
 struct CmdArgs {
@@ -26,6 +25,12 @@ struct CmdArgs {
 struct EditBuffer {
   text: TextBuffer;
   filename: Option(PathBuf);
+}
+
+enum Cmd {
+  Quit,
+  File(Option<PathBuf>),
+  Edit(Option<PathBuf>),
 }
 
 ## Design
@@ -67,6 +72,7 @@ accept_command(reader, cmd_input) {
   cmd_input.clear()
   read_str(reader, &cmd_input)
 }
+
 parse_command(cmd_input) -> Result<Cmd> {
   // parse the comman string
 }

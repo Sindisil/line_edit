@@ -7,8 +7,7 @@ sections: MVP (minimum viable product) and Enhancements.
 
 This section describes the minimum features to allow lned to be used
 (albeit painfully) for its own continued development. Once these
-features are complete I could (and will try to) dogfood lned
-development elopment.
+features are complete I could (and will try to) dogfood lned development.
 
 * launch, with optional file path to read in
   - If no file is specified, create empty edit buffer reading file.
@@ -16,32 +15,36 @@ development elopment.
 
 ## Line Addressing
 
-A address is the number of a line in a buffer. *lned* keeps track of the
-_current address_, which is commands typically use if no address is
-specified. When a file is read into a buffer, thecurrent address is
-the last line read. After a command executes, the current address
+A line address specifies a line in a buffer. *lned* keeps track of the
+_current line_, which commands typically use if no address is
+specified. When a file is read into a buffer, the current line is
+the last line read. After a command executes, the current line
 is set to the last line affected by a command.
 
 A line address is specified by one of:
 
-.        The current line address.
+.        The current line.
 $        The last line in the buffer.
-_n_      The _n_th line in the buffer, in the range [0,$]
-0        Before the first line.
+_n_      The _n_th line in the buffer, in the range [1,$]
+0        Before the first line, where that makes sense (i.e., append or insert).
 
-An address range is a closed range, represented by two line
+An line span is a closed range, represented by two line
 addresses separated by a comma or semicolon. The value of the first
 address must not exceed the value  of the second. If only one address
-is given where a range is expected, it is treated as if the specified
-line was given as both the beginning and end of the range.
-If a line range is given where a command expects a single line
-address, the last line specified by the range is used.
+is given where a span is expected, it is treated as if the specified
+line was given as both the beginning and end of the span.
+If a line span is given where a command expects a single line
+address, the last line specified by the span is used.
 
-Two special shortcuts for common ranges exist:
+Two special shortcuts for common spans exist:
 
-, or %   All the lines in the buffer; equivalent to the range 1,$.
+, or %   All the lines in the buffer; equivalent to the span 1,$.
 ;        The current through last lines in the buffer; equivalent to
-         the range .,$.
+         the span .,$.
+
+When multiple buffer support is added, both addresses and spans may be prefixed
+by a buffer specifier, which is separated from the line address or span by a colon (':').
+The buffer specifier will initially be the buffer number.
 
 ## Commands
 
