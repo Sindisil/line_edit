@@ -62,25 +62,61 @@ actually execute the command. This will also be documented for each
 such command.
 
 ### Edit Commands
-* (.)a            Appends text entered in input mode after the specified
-                  line, setting current address to the last line entered.
-* (.,.)d          Delete specified line range
-* (.,.)n          Print specified line range prefixed with their line
-                  numbers
+(.)a            Appends text entered in input mode after the specified
+                line, setting the current line to the last line entered.
+
+(.,.)c          Change the specified lines by deleting them and appending
+                text entered in input mode in their place. The buffer's current
+                line is set to the last line enterd.
+
+(.,.)m(.)       Move the specfied lines to the after the specified destination
+                line. The current address is set to the last line moved.
+
+//TODO - fill out descriptions of insert, transfer (copy), join, Justify
+(.,.)i
+
+(.,.)t(.)
+
+(.,.+1)j <"join string">
+
+(.,.+1)J_w_
+
+(.,.)d          Delete the specified lines. The current line is set to the line
+                after the deleted lines, if there is one, otherwise to the line
+                before them.
 
 ### Immediate Commands
-* q               Quits lned. If there are unwritten changes, a warning
-                  to that effect will be written to stdout. Repeating
-                  the command will exit unconditionally, discarding
-                  unwritten changes.
-* (1,$)w _file_   Write the specified lines to __file__, overwriting
-                  previous contents without warning. If there is no
-                  default filename, it is set to __file_, otherwise it
-                  is unchanged. If __file__ is not given, the default
-                  filename is used.
-                  The current address is not changed.
-* f _file_        Set default filename to _file_. If no _file_ is given,
-                  prints the default filename.
+
+e _file_        Edit _file_ in a new buffer. If no _file_ is specified, create a
+                new, empty buffer. Either way, the new buffer becomes the active
+                buffer. The last line in the new buffer becomes the buffer's
+                current line and, if specified, the buffer's default file is
+                set to _file_.
+
+f _file_        Set the current buffer's default filename to _file_.
+                If no _file_ is given, prints the buffer's default filename.
+
+(.,.)n          Write the specified lines to stdout, prefixed with line numbers.
+                The buffer's current line is set to the last line written.
+
+(.,.)p          Write the specified lines to stdout. The buffer's current line
+                is set to the last line written.
+
+q               Quits lned. If there are unwritten changes in any
+                buffer, a warning to stdout. A second consecutive quit command
+                will exit unconditionally, discarding unwritten changes.
+
+(.+1)z_n_       Display _n_ lines starting at the specified line. If _n_ is not
+                specified, then the current terminal window height is used. If
+                it isn't possible to fetch the current terminal windown height,
+                the configured scroll_window_size is used as the final fallback
+                (defaulting to 25).
+
+(1,$)w _file_   Write the specified lines to _file_, overwriting
+                previous contents without warning. If there is no
+                default filename, it is set to _file_, otherwise it
+                is unchanged. If _file_ is not given, the default
+                filename is used if it is set, otherwise an error is given.
 
 ## Input Mode
 
@@ -92,3 +128,4 @@ terminated by CR or CRLF.
 
 The interrupt signal (usually CTRL-c) will also exit Input Mode, but
 will discard the input text.
+

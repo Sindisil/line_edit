@@ -8,13 +8,14 @@ work best using relatively straightforward and simple tools. (for values of "bes
 that encompass comfort, happiness, and effectiveness/productivity).
 
 To that end, and just for fun, I'm bootstrapping lned using ed, and then intend
-to se lned to complete its own development. As of this writing, the plan is then
+to use lned to complete its own development. As of this writing, the plan is then
 to use lned to bootstrap development on a terminal based screen editor (scrned).
 
 For these reasons, simplicity (to the point of "simplest thing that will reasonably work")
 should be the overarching design focus for lned.
 
-This document is intended to flesh out the design of lned using pseudocode.
+This document is intended to flesh out the design of lned using pseudocode,
+as well as provide a space to hash out design alternatives.
 
 ## Data Types
 
@@ -25,6 +26,7 @@ struct CmdArgs {
 struct EditBuffer {
   text: TextBuffer;
   filename: Option(PathBuf);
+  current_line: isize;
 }
 
 enum Cmd {
@@ -67,7 +69,6 @@ show_prompt(writer, bufferuffer) {
   // will eventually test for changed buffer
   write(writer, ':')
 }
-
 accept_command(reader, cmd_input) {
   cmd_input.clear()
   read_str(reader, &cmd_input)
