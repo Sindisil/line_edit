@@ -1,10 +1,11 @@
 use crate::cli;
+use crate::edit_buffer::EditBuffer;
 use std::fmt;
 use std::io::{self, prelude::*};
 
 #[derive(Debug)]
 pub enum Error {
-    GeneralError(String),
+    Other(String),
     CommandInput,
 }
 
@@ -14,7 +15,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::CommandInput => write!(f, "Error reading command"),
-            Error::GeneralError(s) => write!(f, "General error: {s}"),
+            Error::Other(s) => write!(f, "Error: {s}"),
         }
     }
 }
@@ -24,11 +25,13 @@ where
     R: BufRead,
     W: Write,
 {
+    let buffers = initialize_buffers(&args)?;
+
     loop {
         let cmd = read_command(":", &mut input, &mut output)?;
-        return Err(Error::GeneralError("Nothing implemented yet".to_string()));
+        return Err(Error::Other("Nothing implemented yet".to_string()));
     }
-    Err(Error::GeneralError("Nothing implemented yet".to_string()))
+    Err(Error::Other("Nothing implemented yet".to_string()))
 }
 
 fn read_command<R, W>(prompt: &str, mut input: R, mut output: W) -> Result<String, Error>
@@ -36,9 +39,11 @@ where
     R: BufRead,
     W: Write,
 {
-    Err(Error::GeneralError(
-        "read_command not implemented yet".to_string(),
-    ))
+    Err(Error::Other("read_command not implemented yet".to_string()))
+}
+
+fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
+    Err(Error::Other("not implemented".to_string()))
 }
 
 // Read lines of text input until a line with a single . is entered

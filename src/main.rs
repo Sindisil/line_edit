@@ -1,4 +1,5 @@
 mod cli;
+mod cmd;
 mod edit_buffer;
 mod main_loop;
 
@@ -13,7 +14,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-    println!("{args:#?}");
     if let Err(err) = main_loop::run(io::stdin().lock(), io::stdout().lock(), &args) {
         eprintln!("Error: {err}");
         std::process::exit(1);
