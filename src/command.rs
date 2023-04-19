@@ -1,7 +1,7 @@
 use std::fmt;
 
 #[derive(Debug, PartialEq)]
-pub enum Command {
+pub enum Cmd {
     Quit,
 }
 
@@ -20,8 +20,8 @@ impl fmt::Display for Error {
     }
 }
 
-impl Command {
-    pub fn parse(input: &str) -> Result<Command, Error> {
+impl Cmd {
+    pub fn parse(input: &str) -> Result<Cmd, Error> {
         Err(Error::Unknown(input.to_string()))
     }
 }
@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn parse_unknown_command_gives_error() {
         let input = "o";
-        let res = Command::parse(&input);
+        let res = Cmd::parse(&input);
         assert_eq!(res, Err(Error::Unknown(input.to_string())));
     }
 }
