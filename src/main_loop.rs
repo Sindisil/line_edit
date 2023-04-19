@@ -7,7 +7,6 @@ use std::io::{self, prelude::*};
 #[derive(Debug)]
 pub enum Error {
     Other(String),
-    CommandInput,
 }
 
 impl std::error::Error for Error {}
@@ -15,7 +14,6 @@ impl std::error::Error for Error {}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Error::CommandInput => write!(f, "Error reading command"),
             Error::Other(s) => write!(f, "Error: {s}"),
         }
     }
@@ -27,10 +25,10 @@ where
     W: Write,
 {
     // Initialize Buffers
-    let buffers = initialize_buffers(&args)?;
+    let _buffers = initialize_buffers(args)?;
 
     // Initialize context (e.g., current buffer)
-    let mut current_buffer = 0;
+    let mut _current_buffer = 0;
 
     // Accept and process commands until fatal error or exit
     loop {
@@ -41,14 +39,14 @@ where
         let cmd = read_command(prompt, &mut input, &mut output)?;
 
         // parse command
-        let cmd = parse_command(&cmd)?;
+        let _cmd = parse_command(&cmd)?;
 
         // execute command
         return Err(Error::Other("Nothing implemented yet".to_string()));
     }
 }
 
-fn read_command<R, W>(prompt: &str, mut input: R, mut output: W) -> Result<String, Error>
+fn read_command<R, W>(_prompt: &str, mut _input: R, mut _output: W) -> Result<String, Error>
 where
     R: BufRead,
     W: Write,
@@ -56,14 +54,14 @@ where
     Err(Error::Other("read_command not implemented yet".to_string()))
 }
 
-fn parse_command(cmd: &str) -> Result<command::Cmd, Error> {
+fn parse_command(_cmd: &str) -> Result<command::Cmd, Error> {
     Err(Error::Other("command parsing not implemented".to_string()))
 }
 
 fn initialize_buffers(args: &cli::CmdArgs) -> Result<Vec<EditBuffer>, Error> {
     let mut buffers = Vec::with_capacity(args.files.len());
 
-    if buffers.len() > 0 {
+    if !buffers.is_empty() {
         return Err(Error::Other(
             "Reading files not yet implemented".to_string(),
         ));

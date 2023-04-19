@@ -113,10 +113,12 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "-h"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--help"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
@@ -126,10 +128,12 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "-V"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--version"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 

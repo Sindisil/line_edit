@@ -2,7 +2,7 @@ use std::fmt;
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
-    Quit,
+    //Quit,
 }
 
 #[derive(Debug, PartialEq)]
