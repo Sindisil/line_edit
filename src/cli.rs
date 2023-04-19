@@ -32,7 +32,7 @@ pub enum Error {
     UnexpectedArg(lexopt::Error),   // Unexpected cmd line argument
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CmdArgs {
     /// Indicates that default print operation should be n, rather than
     /// p (i.e., print line numbers by default). Explicit use of n or p
@@ -139,7 +139,6 @@ mod tests {
 
     #[test]
     fn unexpected_option_gives_error() {
-        //let expected = Error::UnexpectedArg(arg.unexpected());
         let mut output = Vec::new();
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);
