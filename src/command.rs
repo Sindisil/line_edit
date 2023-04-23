@@ -1,9 +1,9 @@
 use std::fmt;
 use std::str;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Cmd {
-    //Quit,
+    Quit,
 }
 
 #[derive(Debug, PartialEq)]
@@ -25,7 +25,11 @@ impl str::FromStr for Cmd {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Err(ParseError::Unknown(s.to_string()))
+        let s = s.trim();
+        match s {
+            "q" => Ok(Cmd::Quit),
+            _ => Err(ParseError::Unknown(s.to_string())),
+        }
     }
 }
 
@@ -36,7 +40,17 @@ mod tests {
     #[test]
     fn parse_unknown_command_gives_error() {
         let input = "o";
-        let res = input.parse::<Cmd>();
-        assert_eq!(res, Err(ParseError::Unknown(input.to_string())));
+        let res = input
+            .parse::<Cmd>()
+            .err()
+            .expect("should always be an error");
+        assert!(matches!(res, ParseError::Unknown(_)));
+    }
+
+    #[test]
+    fn parse_quit() {
+        let input = "q";
+        let res = input.parse::<Cmd>().expect("should always parse ok");
+        assert!(matches!(res, Cmd::Quit));
     }
 }
