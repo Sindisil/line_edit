@@ -32,20 +32,18 @@ pub enum Error {
     UnexpectedArg(lexopt::Error),   // Unexpected cmd line argument
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CmdArgs {
-    /// Indicates if diagnostic messages should be suppressed
-
     /// Indicates that default print operation should be n, rather than
     /// p (i.e., print line numbers by default). Explicit use of n or p
     /// commands work normally -- this affects other display commands,
     /// such as z, as well as cases where display occurs as a part of
     /// another operation (such as a bare line address, or the p suffix
     /// to the s command.
-    line_numbers: bool,
+    pub line_numbers: bool,
 
     /// Specifies the names of files to read
-    files: Vec<PathBuf>,
+    pub files: Vec<PathBuf>,
 }
 
 pub(crate) fn parse_args<W, I>(mut output: W, args: I) -> Result<CmdArgs, Error>
@@ -115,10 +113,12 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "-h"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--help"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
@@ -128,16 +128,17 @@ mod tests {
         let mut output = Vec::new();
         let args = &["test", "-V"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
         output.clear();
         let args = &["test", "--version"];
         let res = parse_args(&mut output, args);
+        assert!(matches!(res, Err(Error::WroteMessage)));
         assert_eq!(std::str::from_utf8(&output).unwrap(), expected);
     }
 
     #[test]
     fn unexpected_option_gives_error() {
-        //let expected = Error::UnexpectedArg(arg.unexpected());
         let mut output = Vec::new();
         let args = &["test", "--unexpected-arg"];
         let res = parse_args(&mut output, args);

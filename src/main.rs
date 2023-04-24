@@ -1,5 +1,5 @@
 mod cli;
-mod cmd;
+mod command;
 mod edit_buffer;
 mod main_loop;
 
