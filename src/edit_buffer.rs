@@ -90,12 +90,12 @@ impl EditBuffer {
 
     /// Reads lines from reader and appends them after the specified line.
     /// Returns index of last line read, or an error if read fails
-    pub fn read<R>(&mut self, after_line: usize, mut reader: R) -> Result<usize, Error>
+    pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<usize, Error>
     where
         R: io::BufRead,
     {
-        if after_line > self.text.len() {
-            return Err(Error::ReadBadIndex(self.len(), after_line));
+        if at_line > self.text.len() {
+            return Err(Error::ReadBadIndex(self.len(), at_line));
         }
         let mut lines = Vec::new();
         let mut line = String::new();
@@ -107,10 +107,9 @@ impl EditBuffer {
             lines.push(line);
             line = String::new();
         }
-        // Insert or append read lines reasonably efficiently
         let lines_added = lines.len();
-        self.text.splice(after_line..after_line, lines.into_iter());
-        Ok(after_line + lines_added - 1)
+        self.text.splice(at_line..at_line, lines.into_iter());
+        Ok(at_line + lines_added - 1)
     }
 }
 
@@ -150,7 +149,7 @@ mod tests {
     ////
     // read() tests
 
-    fn new_input_buf(content: &Vec<&str>) -> Vec<u8> {
+    fn new_input_buf(content: &[&str]) -> Vec<u8> {
         let mut input = Vec::new();
         for line in content {
             input.extend(line.bytes());
@@ -186,12 +185,47 @@ mod tests {
 
     #[test]
     fn read_append() {
-        assert!(false, "TODO");
+        let mut buffer = EditBuffer::new();
+        let content = vec![
+            "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
+        ];
+
+        let input = new_input_buf(&content[..3]);
+        let last_read = buffer.read(0, &input[..]).expect("Error reading content");
+
+        let input = new_input_buf(&content[3..]);
+        let last_read = buffer
+            .read(buffer.len(), &input[..])
+            .expect("Error reading new content");
+
+        assert_eq!(content, buffer.text);
+        assert_eq!(content.len(), buffer.len());
+        assert_eq!(buffer.len() - 1, last_read);
     }
 
     #[test]
     fn read_insert() {
-        assert!(false, "TODO");
+        let mut buffer = EditBuffer::new();
+
+        let initial_content = vec!["Line1\n", "Line2\n", "Line3\n"];
+        let input = new_input_buf(&initial_content[..]);
+        let last_read = buffer
+            .read(0, &input[..])
+            .expect("Error reading initial_content");
+
+        let new_content = vec!["New1\n", "New2\n", "New3\n"];
+        let input = new_input_buf(&new_content[..]);
+        let index = 2;
+        let last_read = buffer
+            .read(index, &input[..])
+            .expect("Error reading new_content");
+
+        let final_content = vec![
+            "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
+        ];
+        assert_eq!(final_content, buffer.text);
+        assert_eq!(final_content.len(), buffer.len());
+        assert_eq!(index + new_content.len() - 1, last_read);
     }
 
     #[test]
