@@ -161,7 +161,7 @@ impl EditBuffer {
 }
 
 fn find_default_eol(lines: &[String]) -> String {
-    let mut eols = vec![("\r\n", 0), ("\n", 0), ("\r", 0)];
+    let mut eols = vec![("\r\n", 0), ("\n", 0)];
 
     for line in lines {
         for eol in &mut eols {
