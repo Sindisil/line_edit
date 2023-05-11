@@ -238,7 +238,7 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
-        assert_eq!(content.len(), buffer.len());
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
     }
 
     #[test]
@@ -251,8 +251,7 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
-        assert_eq!(content.len(), buffer.len());
-        assert_eq!(buffer.default_eol, Some("\n".to_string()));
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
     }
 
     #[test]
@@ -276,9 +275,8 @@ mod tests {
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ];
         assert_eq!(final_content, buffer.text);
-        assert_eq!(final_content.len(), buffer.len());
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(buffer.default_eol, Some("\n".to_string()));
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
     }
 
     #[test]
@@ -300,9 +298,16 @@ mod tests {
 
         let final_content = vec!["Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3"];
         assert_eq!(final_content, buffer.text);
-        assert_eq!(final_content.len(), buffer.len());
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(buffer.default_eol, Some("\n".to_string()));
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+    }
+
+    #[test]
+    fn read_append_eol_detect_and_correct() {
+        // Buffer EOL: \n, \n no final, \r\n, \r\n no final, mixed, mixed no final,
+        //             mixed even, mixed even no final
+        // NewText EOL: \n, \r\n, mixed, mixed even
+        assert!(false);
     }
 
     #[test]
@@ -326,9 +331,33 @@ mod tests {
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
         ];
         assert_eq!(final_content, buffer.text);
-        assert_eq!(final_content.len(), buffer.len());
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(buffer.default_eol, Some("\n".to_string()));
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+    }
+
+    #[test]
+    fn read_insert_no_trailing_eol() {
+        let mut buffer = EditBuffer::new();
+
+        let initial_content = vec!["Line1\n", "Line2\n", "Line3\n"];
+        let input = new_input_buf(&initial_content[..]);
+        let _last_read = buffer
+            .read(0, &input[..])
+            .expect("Error reading initial_content");
+
+        let new_content = vec!["New1\n", "New2\n", "New3"];
+        let input = new_input_buf(&new_content[..]);
+        let index = 2;
+        let last_read = buffer
+            .read(index, &input[..])
+            .expect("Error reading new_content");
+
+        let final_content = vec![
+            "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
+        ];
+        assert_eq!(final_content, buffer.text);
+        assert_eq!(index + new_content.len() - 1, last_read);
+        assert_eq!(Some("\n".to_string()), buffer.default_eol);
     }
 
     #[test]
