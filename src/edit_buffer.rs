@@ -1,4 +1,5 @@
 use regex::Regex;
+use std::cmp::Ordering;
 use std::fmt;
 use std::io::{self, prelude::*};
 use std::path;
@@ -8,7 +9,7 @@ pub struct EditBuffer {
     needs_write: bool,
     cur_line: usize,
     default_filename: Option<path::PathBuf>,
-    default_eol: Option<String>,
+    default_eol: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -160,12 +161,11 @@ impl EditBuffer {
     }
 }
 
-// TODO - decide if this can return &str or &'static str
-fn find_default_eol(lines: &[String]) -> String {
+fn find_default_eol(lines: &[String]) -> &'static str {
     let native_eol = if std::env::consts::FAMILY == "windows" {
-        "\r\n".to_string()
+        "\r\n"
     } else {
-        "\n".to_string()
+        "\n"
     };
     let mut crlf = 0;
     let mut lf = 0;
@@ -173,17 +173,15 @@ fn find_default_eol(lines: &[String]) -> String {
     for line in lines {
         if line.ends_with("\r\n") {
             crlf += 1;
-        } else if line.ends_with("\n") {
+        } else if line.ends_with('\n') {
             lf += 1;
         }
     }
 
-    if crlf > lf {
-        "\r\n".to_string()
-    } else if lf > crlf {
-        "\n".to_string()
-    } else {
-        native_eol
+    match crlf.cmp(&lf) {
+        Ordering::Greater => "\r\n",
+        Ordering::Less => "\n",
+        _ => native_eol,
     }
 }
 
@@ -241,7 +239,7 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]
@@ -254,7 +252,7 @@ mod tests {
             .expect("Error reading content");
         assert_eq!(content, buffer.text);
         assert_eq!(3, last_line_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]
@@ -279,7 +277,7 @@ mod tests {
         ];
         assert_eq!(final_content, buffer.text);
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]
@@ -302,7 +300,7 @@ mod tests {
         let final_content = vec!["Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3"];
         assert_eq!(final_content, buffer.text);
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]
@@ -335,7 +333,7 @@ mod tests {
         ];
         assert_eq!(final_content, buffer.text);
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]
@@ -360,7 +358,7 @@ mod tests {
         ];
         assert_eq!(final_content, buffer.text);
         assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n".to_string()), buffer.default_eol);
+        assert_eq!(Some("\n"), buffer.default_eol);
     }
 
     #[test]

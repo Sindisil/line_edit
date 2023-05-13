@@ -72,7 +72,7 @@ where
     }
 }
 
-fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &Vec<EditBuffer>) -> bool {
+fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> bool {
     let ok = match prev_command {
         Some(Cmd::Quit) => true,
         _ => !buffers.iter().any(|buf| buf.needs_write()),
