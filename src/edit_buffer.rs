@@ -188,6 +188,7 @@ fn find_default_eol(lines: &[String]) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ops::Deref;
 
     struct BadReader {}
 
@@ -221,7 +222,10 @@ mod tests {
     ////
     // read() tests
 
-    fn new_input_buf(content: &[&str]) -> Vec<u8> {
+    fn new_input_buf<S>(content: &[S]) -> Vec<u8>
+    where
+        S: Deref<Target = str>,
+    {
         let mut input = Vec::new();
         for line in content {
             input.extend(line.bytes());
