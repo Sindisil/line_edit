@@ -170,10 +170,10 @@ fn compute_native_eol() -> &'static str {
     }
 }
 
-    fn compute_default_eol<S>(lines: &[S]) -> &'static str
-    where
+fn compute_default_eol<S>(lines: &[S]) -> &'static str
+where
     S: Deref<Target = str>,
-    {
+{
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
     } else {
@@ -242,46 +242,33 @@ mod tests {
 
     #[test]
     fn default_eol_when_all_crlf() {
-        let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n",];
+        let lines = vec!["L1\r\n", "L2\r\n", "L3\r\n"];
         assert_eq!("\r\n", compute_default_eol(&lines));
     }
 
     #[test]
     fn default_eol_when_all_lf() {
-        let lines = vec!["L1\n", "L2\n", "L3\n",];
+        let lines = vec!["L1\n", "L2\n", "L3\n"];
         assert_eq!("\n", compute_default_eol(&lines));
     }
 
     #[test]
     fn default_eol_when_most_crlf() {
-        let lines = vec!["L1\r\n", "L2\n", "L3\r\n",];
+        let lines = vec!["L1\r\n", "L2\n", "L3\r\n"];
         assert_eq!("\r\n", compute_default_eol(&lines));
     }
 
     #[test]
     fn default_eol_when_most_lf() {
-        let lines = vec!["L1\n", "L2\n", "L3\r\n",];
+        let lines = vec!["L1\n", "L2\n", "L3\r\n"];
         assert_eq!("\n", compute_default_eol(&lines));
     }
 
     #[test]
     fn default_eol_when_equal_lf_crlf() {
-        let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n",];
+        let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
         assert_eq!(compute_native_eol(), compute_default_eol(&lines));
     }
-
-    // define macro to generate test cases with input lines & expected answer
-    // something like:
-    // read_test {
-    //    name: insert_nonterminated,
-    //    initial: vec!["Line 1\n", "Line 2\r\n", "Line 3\n"],
-    //    added: vec!["Added 1\r\n", "Added 2\r\n", "Added 3"],
-    //    position: 1,
-    //    expected: vec![
-    //        "Line 1\n", "Added 1\r\n", "Added 2\r\n", "Added 3\n"],
-    //        "Line 2\r\n", "Line 3\n",
-    //    ],
-    // }
 
     ////
     // read() tests
@@ -297,355 +284,96 @@ mod tests {
         input
     }
 
-    #[derive(Debug, PartialEq)]
-    enum EolDistribution {
-        AllCrLf,
-        MostCrLf,
-        Equal,
-        MostLf,
-        AllLf,
-    }
-    #[derive(Debug, PartialEq)]
+    macro_rules! read_test {
+        { $name:ident,
+        initial: $initial:expr,
+        added: $added:expr,
+        at: $at:expr,
+        expect: $expect:expr,
+        last line read: $last_line:expr$(,)? } => {
+            #[test]
+            fn $name() {
+                let mut buffer = EditBuffer::new();
+                let initial = $initial;
+                if initial.len() > 0 {
+                    let input = new_input_buf(&initial[..]);
+                    let _last_read = buffer
+                        .read(0, &input[..])
+                        .expect("Error reading initial content");
+                }
 
-    enum LastLineEol {
-        Present,
-        Missing,
-    }
+                let added = $added;
+                let input = new_input_buf(&added[..]);
+                let last_read = buffer
+                    .read($at, &input[..])
+                    .expect("Error reading added lines");
 
-    fn build_line_sample(
-        buf: &mut Vec<String>,
-        eol_line_count: usize,
-        template: &str,
-        eol_dist: EolDistribution,
-        last_eol: LastLineEol,
-    ) {
-        assert_eq!(0, eol_line_count % 2); // Must be an even number of lines with EOL
-        let majority_count = (eol_line_count as f64 * 0.8).floor() as usize;
-        let minority_count = eol_line_count - majority_count;
-
-        buf.clear();
-        buf.reserve(if let LastLineEol::Present = last_eol {
-            eol_line_count
-        } else {
-            eol_line_count + 1
-        });
-
-        use EolDistribution::*;
-
-        let (m, n, eol) = match eol_dist {
-            AllCrLf => (1, eol_line_count, "\r\n"),
-            AllLf => (1, eol_line_count, "\n"),
-            MostCrLf => (1, majority_count - 1, "\r\n"),
-            MostLf => (1, majority_count - 1, "\n"),
-            Equal => (1, eol_line_count / 2 - 1, "\n"),
+                assert_eq!($expect, buffer.text);
+                assert_eq!($at + added.len() - 1, last_read);
+            }
         };
-        for i in m..=n {
-            buf.push(format!("{template} {i}{eol}"));
-        }
-
-        let (m, n, eol) = match eol_dist {
-            AllCrLf | AllLf => (n + 1, 0, ""),
-            MostCrLf => (n + 1, n + minority_count, "\n"),
-            MostLf => (n + 1, n + minority_count, "\r\n"),
-            Equal => (n + 1, n + eol_line_count / 2, "\r\n"),
-        };
-        for i in m..=n {
-            buf.push(format!("{template} {i}{eol}"));
-        }
-
-        let (m, n, eol) = match eol_dist {
-            AllCrLf | AllLf => (m, 0, ""),
-            MostCrLf => (n + 1, n + 1, "\r\n"),
-            MostLf | Equal => (n + 1, n + 1, "\n"),
-        };
-        for i in m..=n {
-            buf.push(format!("{template} {i}{eol}"));
-        }
-
-        if let LastLineEol::Missing = last_eol {
-            let m = match eol_dist {
-                AllCrLf | AllLf => m,
-                _ => m + 1,
-            };
-            buf.push(format!("{template} {m}"));
-        }
     }
 
-    ////
-    // build_line_sample() tests
-
-    #[test]
-    fn build_line_sample_all_lf() {
-        let mut buf: Vec<String> = Vec::new();
-
-        let content = vec![
-            "TestLine 1\n",
-            "TestLine 2\n",
-            "TestLine 3\n",
-            "TestLine 4\n",
-            "TestLine 5",
-        ];
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::AllLf,
-            LastLineEol::Present,
-        );
-        assert_eq!(content[0..4], buf);
-
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::AllLf,
-            LastLineEol::Missing,
-        );
-        assert_eq!(content, buf);
+    read_test! {
+        read_to_empty_buf,
+        initial: Vec::<&str>::new(),
+        added: vec!["Line1\n", "Line2\n", "Line3\n",],
+        at: 0,
+        expect: vec!["Line1\n", "Line2\n", "Line3\n",],
+        last line read: 3,
     }
 
-    #[test]
-    fn build_line_sample_all_crlf() {
-        let mut buf: Vec<String> = Vec::new();
-
-        let content = vec![
-            "TestLine 1\r\n",
-            "TestLine 2\r\n",
-            "TestLine 3\r\n",
-            "TestLine 4\r\n",
-            "TestLine 5",
-        ];
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::AllCrLf,
-            LastLineEol::Present,
-        );
-        assert_eq!(content[0..4], buf);
-
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::AllCrLf,
-            LastLineEol::Missing,
-        );
-        assert_eq!(content, buf);
+    read_test! {
+        read_to_empty_buf_no_final_eol,
+        initial: Vec::<&str>::new(),
+        added: vec!["Line1\n", "Line2\n", "Line3",],
+        at: 0,
+        expect: vec!["Line1\n", "Line2\n", "Line3",],
+        last line read: 3,
     }
 
-    #[test]
-    fn build_line_sample_most_lf() {
-        let mut buf: Vec<String> = Vec::new();
-
-        let content = vec![
-            "TestLine 1\n",
-            "TestLine 2\n",
-            "TestLine 3\r\n",
-            "TestLine 4\n",
-            "TestLine 5",
-        ];
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::MostLf,
-            LastLineEol::Present,
-        );
-        assert_eq!(content[0..4], buf);
-
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::MostLf,
-            LastLineEol::Missing,
-        );
-        assert_eq!(content, buf);
-    }
-
-    #[test]
-    fn build_line_sample_most_crlf() {
-        let mut buf: Vec<String> = Vec::new();
-
-        let content = vec![
-            "TestLine 1\r\n",
-            "TestLine 2\r\n",
-            "TestLine 3\n",
-            "TestLine 4\r\n",
-            "TestLine 5",
-        ];
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::MostCrLf,
-            LastLineEol::Present,
-        );
-        assert_eq!(content[0..4], buf);
-
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::MostCrLf,
-            LastLineEol::Missing,
-        );
-        assert_eq!(content, buf);
-    }
-
-    #[test]
-    fn build_line_sample_equal() {
-        let mut buf: Vec<String> = Vec::new();
-
-        let content = vec![
-            "TestLine 1\n",
-            "TestLine 2\r\n",
-            "TestLine 3\r\n",
-            "TestLine 4\n",
-            "TestLine 5",
-        ];
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::Equal,
-            LastLineEol::Present,
-        );
-        assert_eq!(content[0..4], buf);
-
-        build_line_sample(
-            &mut buf,
-            4,
-            "TestLine",
-            EolDistribution::Equal,
-            LastLineEol::Missing,
-        );
-        assert_eq!(content, buf);
-    }
-
-    #[test]
-    fn read_to_empty_buffer() {
-        let mut buffer = EditBuffer::new();
-        let content = vec!["Line1\n", "Line2\n", "Line3\n", "Line4\n"];
-        let input = new_input_buf(&content);
-        let last_line_read = buffer
-            .read(buffer.len(), &input[..])
-            .expect("Error reading content");
-        assert_eq!(content, buffer.text);
-        assert_eq!(3, last_line_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
-    }
-
-    #[test]
-    fn read_to_empty_buffer_no_trailing_eol() {
-        let mut buffer = EditBuffer::new();
-        let content = vec!["Line1\n", "Line2\n", "Line3\n", "Line4"];
-        let input = new_input_buf(&content);
-        let last_line_read = buffer
-            .read(buffer.len(), &input[..])
-            .expect("Error reading content");
-        assert_eq!(content, buffer.text);
-        assert_eq!(3, last_line_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
-    }
-
-    #[test]
-    fn read_append() {
-        let mut buffer = EditBuffer::new();
-
-        let initial_content = vec!["Line1\n", "Line2\n", "Line3\n"];
-        let input = new_input_buf(&initial_content[..]);
-        let _last_read = buffer
-            .read(0, &input[..])
-            .expect("Error reading initial_content");
-
-        let new_content = vec!["New1\n", "New2\n", "New3\n"];
-        let input = new_input_buf(&new_content[..]);
-        let index = buffer.len();
-        let last_read = buffer
-            .read(index, &input[..])
-            .expect("Error reading new_content");
-
-        let final_content = vec![
+    read_test! {
+        read_append,
+        initial: vec!["Line1\n", "Line2\n", "Line3\n",],
+        added: vec!["New1\n", "New2\n", "New3\n"],
+        at: 3,
+        expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
-        ];
-        assert_eq!(final_content, buffer.text);
-        assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
+        ],
+        last line read: 5,
     }
 
-    #[test]
-    fn read_append_no_trailing_eol() {
-        let mut buffer = EditBuffer::new();
-
-        let initial_content = vec!["Line1\n", "Line2\n", "Line3"];
-        let input = new_input_buf(&initial_content[..]);
-        let _last_read = buffer
-            .read(0, &input[..])
-            .expect("Error reading initial_content");
-
-        let new_content = vec!["New1\n", "New2\n", "New3"];
-        let input = new_input_buf(&new_content[..]);
-        let index = buffer.len();
-        let last_read = buffer
-            .read(index, &input[..])
-            .expect("Error reading new_content");
-
-        let final_content = vec!["Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3"];
-        assert_eq!(final_content, buffer.text);
-        assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
+    read_test! {
+        read_append_no_trailing_eol,
+        initial: vec!["Line1\n", "Line2\n", "Line3",],
+        added: vec!["New1\n", "New2\n", "New3\n"],
+        at: 3,
+        expect: vec![
+            "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
+        ],
+        last line read: 5,
     }
 
-    #[test]
-    fn read_insert() {
-        let mut buffer = EditBuffer::new();
-
-        let initial_content = vec!["Line1\n", "Line2\n", "Line3\n"];
-        let input = new_input_buf(&initial_content[..]);
-        let _last_read = buffer
-            .read(0, &input[..])
-            .expect("Error reading initial_content");
-
-        let new_content = vec!["New1\n", "New2\n", "New3\n"];
-        let input = new_input_buf(&new_content[..]);
-        let index = 2;
-        let last_read = buffer
-            .read(index, &input[..])
-            .expect("Error reading new_content");
-
-        let final_content = vec![
+    read_test! {
+        read_insert,
+        initial: vec!["Line1\n", "Line2\n", "Line3\n",],
+        added: vec!["New1\n", "New2\n", "New3\n"],
+        at: 2,
+        expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
-        ];
-        assert_eq!(final_content, buffer.text);
-        assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
+        ],
+        last line read: 4,
     }
 
-    #[test]
-    fn read_insert_no_trailing_eol() {
-        let mut buffer = EditBuffer::new();
-
-        let initial_content = vec!["Line1\n", "Line2\n", "Line3\n"];
-        let input = new_input_buf(&initial_content[..]);
-        let _last_read = buffer
-            .read(0, &input[..])
-            .expect("Error reading initial_content");
-
-        let new_content = vec!["New1\n", "New2\n", "New3"];
-        let input = new_input_buf(&new_content[..]);
-        let index = 2;
-        let last_read = buffer
-            .read(index, &input[..])
-            .expect("Error reading new_content");
-
-        let final_content = vec![
+    read_test! {
+        read_insert_no_trailing_eol,
+        initial: vec!["Line1\n", "Line2\n", "Line3\n",],
+        added: vec!["New1\n", "New2\n", "New3"],
+        at: 2,
+        expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
-        ];
-        assert_eq!(final_content, buffer.text);
-        assert_eq!(index + new_content.len() - 1, last_read);
-        assert_eq!(Some("\n"), buffer.default_eol);
+        ],
+        last line read: 4,
     }
 
     #[test]
