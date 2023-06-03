@@ -1,25 +1,26 @@
-cmd : ws* [q]
-    | ws* [eE] (ws+ filename | ws+ [!] shell_command)?
-    | ws* [f] (ws+ filename)?
-    | ws* [!] shell_command
-    | ws* [!][!]
-    | ws* [uU] print_sfx?
-    | addr_chain? ws* [=] print_sfx?
-    | addr_chain? ws* [aix\n]
-    | addr_chain? ws* [rw]  (ws+ filename | ws* [!] shell_command)?
-    | addr_chain? ws* [z] number? print_sfx?
-    | addr_chain? ws* [cdjJlnpXy] print_sfx?
-    | addr_chain? ws* [R]  (ws+ filename | ws* [!] shell_command)?
-    | addr_chain? ws* [g][^ \n]regex[^ \n] command_list print_sfx?
-    | addr_chain? ws* [mt] ln_expr? print_sfx?
-    | addr_chain? ws* [sv][^ \n]regex[^ \n]replacement[^ \n]([g] | number)? print_sfx?
-    | addr_chain? ws* [s] (number | [g])
-address_chain : address_element+
-address_element : address | address_separator
-address_separator : ws* [;,]
-address : ws* ([.$] | number | [/]regex[/] | [?]regex[?] | [-+] number?) address_offset*
-address_offset : ws* [+-] ws* number?
-               | ws+ number
-number : [0-9]+
+cmd_id : ws* [q]
+       | ws* [eE] (ws+ filename | ws+ [!] shell_cmd)?
+       | ws* [f] (ws+ filename)?
+       | ws* [!] shell_cmd
+       | ws* [!][!]
+       | ws* [uU] prn_sfx?
+       | addr_chain? ws* [acdijJlnp=\n] prn_sfx?
+       | addr_chain? ws* [rRw]  (ws+ filename | ws* [!] shell_cmd)?
+       | addr_chain? ws* [gv][^ \n]regex[^ \n] command_list prn_sfx?
+       | addr_chain? ws* [mt] addr_chain? prn_sfx?
+       | addr_chain? ws* [s][^ \n]regex[^ \n]replacement[^ \n]([g] | num)? prn_sfx?
+       | addr_chain? ws* [s] (num | [g])
+       | addr_chain? ws* [z] num?
+addr_chain : addr
+           | addr? addr_separator addr_chain?
+addr_separator : ws* [;,]
+addr : ws* [.$] addr_offset*
+     | ws* num addr_offset*
+     | ws* [+-] num? addr_offset*
+     | ws* [/]regex[/] addr_offset*
+     | ws* [?]regex[?] addr_offset*
+addr_offset : ws* [+-] ws* num?
+            | ws+ num
+num : [0-9]+
 ws : \s+
-print_sfx : [lnp]
+prn_sfx : [lnp]
