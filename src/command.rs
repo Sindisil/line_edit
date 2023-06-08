@@ -14,6 +14,42 @@ impl CharUtils for char {
 }
 
 #[derive(Debug)]
+struct PeekingTakeWhile<I, P> {
+    iter: I,
+    pred: P,
+}
+
+impl<I, P> Iterator for PeekingTakeWhile<&mut iter::Peekable<I>, P>
+where
+    I: Iterator,
+    P: Fn(&I::Item) -> bool,
+{
+    type Item = I::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next_if(&self.pred)
+    }
+}
+
+trait Peeking: Iterator + Sized {
+    fn peeking_take_while<P>(self, pred: P) -> PeekingTakeWhile<Self, P>
+    where
+        P: Fn(&Self::Item) -> bool;
+}
+
+impl<I> Peeking for &mut iter::Peekable<I>
+where
+    I: Iterator,
+{
+    fn peeking_take_while<P>(self, pred: P) -> PeekingTakeWhile<Self, P>
+    where
+        P: Fn(&Self::Item) -> bool,
+    {
+        PeekingTakeWhile { iter: self, pred }
+    }
+}
+
+#[derive(Debug)]
 pub enum Cmd {
     Quit,
 }
@@ -99,7 +135,7 @@ fn parse_addr_chain(
 fn parse_line_addr(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Option<LineAddr>, ParseError> {
-    let _ = cmd_chars.by_ref().skip_while(|c| c.is_whitespace());
+    cmd_chars.peeking_take_while(|c| c.is_blank());
     if let Some(c) = cmd_chars.peek() {
         match c {
             '.' => {
@@ -126,8 +162,7 @@ fn parse_line_addr(
             }
             '0'..='9' => {
                 let num: String = cmd_chars
-                    .by_ref()
-                    .take_while(|c| matches!('0'..='9', c))
+                    .peeking_take_while(|c| matches!('0'..='9', c))
                     .collect();
                 let num = num.parse().map_err(|_| ParseError::BadLineNumber(num))?;
                 let offsets = parse_addr_offsets(cmd_chars)?;
@@ -144,20 +179,12 @@ fn parse_addr_offsets(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Vec<isize>, ParseError> {
     let mut offset_chars = String::new();
-    while let Some(c) = cmd_chars
-        .by_ref()
-        .next_if(|c| c.is_blank() || c.is_ascii_digit() || *c == '+' || *c == '-')
-    {
-        offset_chars.push(c);
-    }
-    let mut offset_chars = offset_chars.chars().peekable();
     let mut offsets = Vec::new();
-    while let Some(c) = offset_chars.peek() {
+    while let Some(c) = cmd_chars.peek() {
         match c {
             '0'..='9' => {
-                let offset = offset_chars
-                    .by_ref()
-                    .take_while(|c| c.is_ascii_digit())
+                let offset = cmd_chars
+                    .peeking_take_while(|c| c.is_ascii_digit())
                     .try_fold(0isize, |acc, c| {
                         c.to_digit(10).and_then(|d| {
                             acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
@@ -167,10 +194,9 @@ fn parse_addr_offsets(
                 offsets.push(offset);
             }
             '+' => {
-                let offset = offset_chars
-                    .by_ref()
-                    .skip(1)
-                    .take_while(|c| c.is_ascii_digit())
+                cmd_chars.next();
+                let offset = cmd_chars
+                    .peeking_take_while(|c| c.is_ascii_digit())
                     .try_fold(0isize, |acc, c| {
                         c.to_digit(10).and_then(|d| {
                             acc.checked_mul(10).and_then(|n| n.checked_add(d as isize))
@@ -180,10 +206,9 @@ fn parse_addr_offsets(
                 offsets.push(cmp::max(1, offset));
             }
             '-' => {
-                let offset = offset_chars
-                    .by_ref()
-                    .skip(1)
-                    .take_while(|c| c.is_ascii_digit())
+                cmd_chars.next();
+                let offset = cmd_chars
+                    .peeking_take_while(|c| c.is_ascii_digit())
                     .try_fold(0isize, |acc, c| {
                         c.to_digit(10).and_then(|d| {
                             acc.checked_mul(10).and_then(|n| n.checked_sub(d as isize))
@@ -192,9 +217,10 @@ fn parse_addr_offsets(
                     .ok_or(ParseError::OffsetTooSmall)?;
                 offsets.push(cmp::min(-1, offset));
             }
-            _ => {
-                offset_chars.next();
+            ' ' | 't' => {
+                cmd_chars.next();
             }
+            _ => break,
         }
     }
     Ok(offsets)
@@ -257,9 +283,9 @@ mod tests {
 
         #[test]
         fn combined_addr_offsets() {
-            let mut input = " +4++ 5-6   -7 +8---n".chars().peekable();
+            let mut input = " +4++ 5 6-6   -7 +8---n".chars().peekable();
             let _res = parse_addr_offsets(&mut input).unwrap();
-            assert_eq!(vec![4, 1, 1, 5, -6, -7, 8, -1, -1, -1,], _res);
+            assert_eq!(vec![4, 1, 1, 5, 6, -6, -7, 8, -1, -1, -1,], _res);
             assert_eq!("n", input.collect::<String>());
         }
 
