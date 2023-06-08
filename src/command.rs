@@ -82,7 +82,7 @@ pub enum ParseError {
     EarlyEnd,
     OffsetTooLarge,
     OffsetTooSmall,
-    BadLineNumber(String),
+  LineNumberTooLarge,
 }
 
 impl std::error::Error for ParseError {}
@@ -95,7 +95,7 @@ impl fmt::Display for ParseError {
             ParseError::Unknown(s) => write!(f, "Unknown command '{s}'"),
             ParseError::OffsetTooLarge => write!(f, "Offset too large"),
             ParseError::OffsetTooSmall => write!(f, "Offset too small"),
-            ParseError::BadLineNumber(s) => write!(f, "Bad line number: '{s}'"),
+            ParseError::LineNumberTooLarge => write!(f, "Line number too large"),
         }
     }
 }
@@ -161,10 +161,14 @@ fn parse_line_addr(
                 Ok(Some(LineAddr::RevRegex(re, offsets)))
             }
             '0'..='9' => {
-                let num: String = cmd_chars
-                    .peeking_take_while(|c| matches!('0'..='9', c))
-                    .collect();
-                let num = num.parse().map_err(|_| ParseError::BadLineNumber(num))?;
+                let num = cmd_chars
+                    .peeking_take_while(|c| c.is_ascii_digit())
+                    .try_fold(0usize, |acc, c| {
+                        c.to_digit(10).and_then(|d| {
+                            acc.checked_mul(10).and_then(|n| n.checked_add(d as usize))
+                        })
+                    })
+                    .ok_or(ParseError::LineNumberTooLarge)?;
                 let offsets = parse_addr_offsets(cmd_chars)?;
                 Ok(Some(LineAddr::Num(num, offsets)))
             }
