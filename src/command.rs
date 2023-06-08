@@ -186,7 +186,6 @@ fn parse_line_addr(
 fn parse_addr_offsets(
     cmd_chars: &mut iter::Peekable<str::Chars>,
 ) -> Result<Vec<isize>, ParseError> {
-    let mut offset_chars = String::new();
     let mut offsets = Vec::new();
     while let Some(c) = cmd_chars.peek() {
         match c {
