@@ -1,5 +1,6 @@
 use std::cmp;
 use std::fmt;
+use std::fmt::Debug;
 use std::iter;
 use std::str;
 
@@ -55,11 +56,9 @@ where
     }
 }
 
-use std::fmt::Debug;
 impl<I, P> Iterator for PeekingSkipWhile<&mut iter::Peekable<I>, P>
 where
     I: Iterator,
-    I::Item: Debug,
     P: Fn(&I::Item) -> bool,
 {
     type Item = I::Item;
@@ -139,6 +138,7 @@ where
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
+    Null(Option<AddrChain>),
     Print(Option<AddrChain>),
 }
 
@@ -199,7 +199,7 @@ impl str::FromStr for Cmd {
 fn parse_cmd(cmd_chars: &mut iter::Peekable<str::Chars>) -> Result<Cmd, ParseError> {
     let addr_chain: Option<AddrChain> = parse_addr_chain(cmd_chars)?;
     match cmd_chars.peek() {
-        None => Ok(Cmd::Print(addr_chain.or(Some(AddrChain {
+        None | Some('\n') | Some('\r') => Ok(Cmd::Null(addr_chain.or(Some(AddrChain {
             left: Some(LineAddr::Dot(vec![1])),
             ..Default::default()
         })))),
@@ -354,7 +354,7 @@ mod tests {
 
         #[test]
         fn unknown_command_gives_error() {
-            let input = "o";
+            let input = "o\n";
             let res = input
                 .parse::<Cmd>()
                 .err()
@@ -364,9 +364,20 @@ mod tests {
 
         #[test]
         fn blank_cmd_line() {
-            let input = "";
+            let input = "\n";
             let res = input.parse::<Cmd>().expect("successful parse");
-            let expected = Cmd::Print(Some(AddrChain {
+            let expected = Cmd::Null(Some(AddrChain {
+                left: Some(LineAddr::Dot(vec![1])),
+                ..Default::default()
+            }));
+            assert_eq!(expected, res);
+        }
+
+        #[test]
+        fn blank_cmd_line_crlf() {
+            let input = "\r\n";
+            let res = input.parse::<Cmd>().expect("successful parse");
+            let expected = Cmd::Null(Some(AddrChain {
                 left: Some(LineAddr::Dot(vec![1])),
                 ..Default::default()
             }));
@@ -375,9 +386,9 @@ mod tests {
 
         #[test]
         fn offset_only_cmd() {
-            let input = "-";
+            let input = "-\n";
             let res = input.parse::<Cmd>().expect("successful parse");
-            let expected = Cmd::Print(Some(AddrChain {
+            let expected = Cmd::Null(Some(AddrChain {
                 left: Some(LineAddr::Dot(vec![-1])),
                 ..Default::default()
             }));
@@ -386,14 +397,14 @@ mod tests {
 
         #[test]
         fn quit() {
-            let input = "q";
+            let input = "q\n";
             let _res = input.parse::<Cmd>().expect("should always parse ok");
             assert!(matches!(Cmd::Quit, _res));
         }
 
         #[test]
         fn quit_with_illegal_addr() {
-            let input = ".q";
+            let input = ".q\n";
             let res = input.parse::<Cmd>().err().expect("should be an error");
             assert!(matches!(res, ParseError::UnexpectedAddress));
         }

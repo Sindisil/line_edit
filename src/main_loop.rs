@@ -69,6 +69,7 @@ where
                 }
             }
             Cmd::Print(_addr_chain) => todo!(),
+            Cmd::Null(_addr_chain) => todo!(),
         }
     }
 }
