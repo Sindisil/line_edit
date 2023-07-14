@@ -86,6 +86,16 @@ impl ops::Index<ops::RangeInclusive<usize>> for EditBuffer {
     }
 }
 
+impl ops::Index<ops::RangeFrom<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: ops::RangeFrom<usize>) -> &[String] {
+        assert!(index.start > 0, "Invalid range");
+        &self.text[index.start - 1..]
+    }
+}
+
 impl EditBuffer {
     /// Creates a new empty `EditBuffer`.
     ///
@@ -694,5 +704,20 @@ mod tests {
     fn range_inclusive_beyond_end_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[3..=4];
+    }
+
+    #[test]
+    fn range_from() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["4", "5", "6"], buffer[4..]);
+        assert_eq!(vec!["6"], buffer[6..]);
+        assert!(buffer[7..].is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_from_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[0..];
     }
 }
