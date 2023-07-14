@@ -7,7 +7,7 @@ use regex::Regex;
 use std::cmp::Ordering;
 use std::fmt;
 use std::io;
-use std::ops::Deref;
+use std::ops;
 use std::path;
 
 #[derive(Debug, PartialEq)]
@@ -54,6 +54,35 @@ impl From<Vec<&str>> for EditBuffer {
         buf.text.append(&mut value);
         buf.current_line = buf.text.len();
         buf
+    }
+}
+
+impl ops::Index<usize> for EditBuffer {
+    type Output = String;
+
+    #[inline]
+    fn index(&self, index: usize) -> &String {
+        self.get(index).expect("Out of bounds access")
+    }
+}
+
+impl ops::Index<ops::Range<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: ops::Range<usize>) -> &[String] {
+        assert!(index.start > 0 && index.end > 0, "Invalid range");
+        &self.text[index.start - 1..index.end - 1]
+    }
+}
+
+impl ops::Index<ops::RangeInclusive<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: ops::RangeInclusive<usize>) -> &[String] {
+        assert!(*index.start() > 0 && *index.end() > 0, "Invalid range");
+        &self.text[*index.start() - 1..=*index.end() - 1]
     }
 }
 
@@ -126,6 +155,13 @@ impl EditBuffer {
         } else {
             self.current_line = line;
             Ok(())
+        }
+    }
+
+    pub fn get(&self, index: usize) -> Option<&String> {
+        match index {
+            0 => None,
+            _ => self.text.get(index - 1),
         }
     }
 
@@ -206,7 +242,7 @@ fn compute_native_eol() -> &'static str {
 
 fn compute_default_eol<S>(lines: &[S]) -> &'static str
 where
-    S: Deref<Target = str>,
+    S: ops::Deref<Target = str>,
 {
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
@@ -309,7 +345,7 @@ mod tests {
 
     fn new_input_buf<S>(content: &[S]) -> Vec<u8>
     where
-        S: Deref<Target = str>,
+        S: ops::Deref<Target = str>,
     {
         let mut input = Vec::new();
         for line in content {
@@ -578,5 +614,85 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let _res = buffer.read(0, &mut input);
         assert!(matches!(Err::<Error, _>(Error::Read), _res));
+    }
+
+    ////
+    // Indexing tests
+
+    #[test]
+    fn usize_index() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        assert_eq!("1", buffer[1]);
+        assert_eq!("6", buffer[6]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_index_panics() {
+        let buffer = EditBuffer::from(vec!["1"]);
+        let _ = &buffer[0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn index_too_large_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[4];
+    }
+
+    #[test]
+    fn range_index() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2", "3", "4"], buffer[2..5]);
+        assert_eq!(vec!["1", "2", "3", "4", "5", "6"], buffer[1..7]);
+    }
+
+    #[test]
+    fn range_inclusive_index() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2", "3", "4"], buffer[2..=4]);
+        assert_eq!(vec!["1", "2", "3", "4", "5", "6"], buffer[1..=6]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[0..2];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_inclusive_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[0..=1];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_terminated_range_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[1..0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_terminated_range_inclusive_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[1..=0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn range_too_far_beyond_end_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[3..5];
+    }
+
+    #[test]
+    #[should_panic]
+    fn range_inclusive_beyond_end_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[3..=4];
     }
 }
