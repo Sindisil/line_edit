@@ -44,7 +44,7 @@ where
     let current_buffer = 0;
     let mut cmd_buf = String::new();
     let mut prev_command: Option<Cmd> = None;
-    let mut address_pattern: Option<regex::Regex> = None;
+    let mut previous_pattern: Option<regex::Regex> = None;
 
     // Accept and process commands until fatal error or exit
     loop {
@@ -60,7 +60,7 @@ where
         let cmd = Cmd::parse(
             &mut cmd_chars,
             &mut buffers[current_buffer],
-            &mut address_pattern,
+            &mut previous_pattern,
         );
 
         // handle possible error
