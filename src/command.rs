@@ -24,9 +24,7 @@ pub enum Error {
     OffsetTooSmall,
     OffsetOverflow,
     InvalidLineNumber,
-    RegexSyntax(String),
-    RegexTooBig(usize),
-    Regex,
+    Regex(regex::Error),
     NoMatchingLine,
     NoPreviousPattern,
     TrailingBackslash,
@@ -45,9 +43,7 @@ impl Display for Error {
             Error::OffsetOverflow => write!(f, "Offset results in invalid line number"),
             Error::OffsetTooSmall => write!(f, "Offset too small"),
             Error::InvalidLineNumber => write!(f, "invalid line number"),
-            Error::RegexSyntax(s) => write!(f, "pattern syntax error '{s}'"),
-            Error::RegexTooBig(n) => write!(f, "pattern exceeds size limit (is {n}"),
-            Error::Regex => write!(f, "pattern error"),
+            Error::Regex(e) => write!(f, "{e}"),
             Error::NoMatchingLine => write!(f, "no matching line"),
             Error::TrailingBackslash => write!(f, "invalid trailing backslash"),
             Error::NoPreviousPattern => write!(f, "no previous pattern"),
@@ -209,10 +205,7 @@ fn eval_line_addr(
         Some('/') => {
             let pattern = parse_pattern(cmd_chars)?;
             if !pattern.is_empty() {
-                *previous_pattern = Some(Regex::new(&pattern).map_err(|e| match e {
-                    regex::Error::Syntax(s) => Error::RegexSyntax(s),
-                    _ => Error::Regex,
-                })?);
+                *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
             }
             let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
             let offset = eval_addr_offsets(cmd_chars)?;
@@ -232,12 +225,7 @@ fn eval_line_addr(
         Some('?') => {
             let pattern = parse_pattern(cmd_chars)?;
             if !pattern.is_empty() {
-                *previous_pattern = Some(Regex::new(&pattern).map_err(|e| match e {
-                    regex::Error::Syntax(s) => Error::RegexSyntax(s),
-                    // todo!() - only two regex errors exist: syntax(str) and toobig(n), so
-                    // I should just create a from() for regex::Error to command::Error accordingly.
-                    _ => Error::Regex,
-                })?);
+                *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
             }
             let re = previous_pattern.as_ref().ok_or(Error::NoPreviousPattern)?;
             let offset = eval_addr_offsets(cmd_chars)?;
@@ -578,7 +566,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let _res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect_err("bad pattern");
-        assert!(matches!(Error::RegexSyntax, _res));
+        assert!(matches!(Error::Regex, _res));
     }
 
     #[test]
@@ -589,7 +577,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let _res =
             eval_line_addr(&mut input, &buffer, &mut previous_pattern).expect_err("bad pattern");
-        assert!(matches!(Error::RegexSyntax, _res));
+        assert!(matches!(Error::Regex, _res));
     }
 
     #[test]
