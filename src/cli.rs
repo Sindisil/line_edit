@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 use core::iter::IntoIterator;
 use std::ffi::OsString;
 use std::io::Write;
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 
 use lexopt::prelude::*;
 
