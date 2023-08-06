@@ -358,8 +358,8 @@ mod tests {
         let mut buffer = EditBuffer::new();
         let res = print_cmd(&mut output, None, &mut buffer);
         assert!(match res {
-          Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
-          _ => false,
+            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
+            _ => false,
         });
     }
 }

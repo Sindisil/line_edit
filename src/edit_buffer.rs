@@ -54,7 +54,7 @@ impl From<Vec<&str>> for EditBuffer {
             .iter()
             .map(|v| {
                 let mut line = v.to_string();
-                if !(line.ends_with("\r\n") || line.ends_with("\n")) {
+                if !(line.ends_with("\r\n") || line.ends_with('\n')) {
                     line.push_str(default_eol.as_ref());
                 }
                 line
@@ -236,7 +236,7 @@ impl EditBuffer {
                 let i = lines.len() - 1;
                 &mut lines[i]
             };
-            if !(last_line.ends_with("\r\n") || last_line.ends_with("\n")) {
+            if !(last_line.ends_with("\r\n") || last_line.ends_with('\n')) {
                 last_line.push_str(default_eol.as_ref());
             }
         }
