@@ -69,13 +69,32 @@ such command.
                 text entered in input mode in their place. The buffer's current
                 line is set to the last line enterd.
 
-(.,.)m(.)       Move the specfied lines to the after the specified destination
-                line. The current address is set to the last line moved.
+(.,.)m(.,.)     Move lines
 
-//TODO - fill out descriptions of insert, transfer (copy), join, Justify
-(.,.)i
+                If a single line is specified as the destination, the addressed lines are
+                moved to after the specified line.
 
-(.,.)t(.)
+                If a line span is specified as the destination, the addressed lines overwrite
+                the destination span, as if by a "change" command.
+
+                In either case, the current_line is set to the last line moved.
+
+                It is an error if the source and destination lines overlap.
+
+//TODO - fill out descriptions of insert, join, Justify
+(.)i
+
+(.,.)t(.,.)     Transfer (i.e., copy) lines.
+
+                If a single line is specified as the destination, the addressed lines are
+                copied to after the specified line.
+
+                If a line span is specified as the destination, the addressed lines overwrite
+                the destination span, as if by a "change" command.
+
+                In either case, the current_line is set to the last line copied.
+
+                It is an error if the source and destination lines overlap.
 
 (.,.+1)j <"join string">
 
@@ -87,11 +106,27 @@ such command.
 
 ### Immediate Commands
 
-e _file_        Edit _file_ in a new buffer. If no _file_ is specified, create a
-                new, empty buffer. Either way, the new buffer becomes the active
-                buffer. The last line in the new buffer becomes the buffer's
-                current line and, if specified, the buffer's default file is
-                set to _file_.
+e _file_        Edit _file_ in the current buffer.
+
+                The buffer's default filename is set to the filename specified. If
+                no file is specified, the buffer's default filename is unchanged.
+                
+                All lines in the buffer are deleted, with a warning if there are
+                unwritten changes.
+
+                If the buffer has a deafault filename set, the contents of that file
+                are read into the buffer, and the current_line is set to the last
+                line read.
+
+E _file_        Edit _file_ in a new buffer.
+
+                A new buffer is created and it's default filename is set to the filename
+                specified. If no file is specified, the bufer's default filename is left
+                unset.
+
+                If the buffer has a deafault filename set, the contents of that file
+                are read into the buffer, and the current_line is set to the last
+                line read.
 
 f _file_        Set the current buffer's default filename to _file_.
                 If no _file_ is given, prints the buffer's default filename.
@@ -171,6 +206,10 @@ this projecet's goals.
   parsing of the errors & warnings, and navigation to the location of
   those errors and warnings.
 
+FIXME: E is now used for Edit in a new buffer, so a new command name would be required
+       here, or a different way of specifying editing in a new buffer would be needed.
+       Might be OK to eliminate the special edit command, since the same can be done
+       with with separate "buffer new", "buffer change", and "edit" commands.
   - E<n> Navigate to the file and line indicated in the error on line <n>
     of the error buffer. If the error indicates other line locations
     (eg. the context information shown by cargo/rustc), specifiying

@@ -1,18 +1,18 @@
 use crate::cli;
-use crate::command::{self, Cmd};
+use crate::command::{self, Address, Cmd};
 use crate::edit_buffer::EditBuffer;
 use std::fmt;
 use std::io::{self, prelude::*};
 
 #[derive(Debug)]
 pub enum Error {
-    /// I/O Error writing out prompt
-    WritePrompt(io::Error),
+    /// I/O Error writing output
+    WriteOutput(io::Error),
     /// I/O Error reading command input
     ReadCommand(io::Error),
     /// I/O Error reading input lines
     ReadLines(io::Error),
-    ParseCmd(command::ParseError),
+    ParseCmd(command::Error),
     Other(String),
 }
 
@@ -22,9 +22,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::ReadCommand(e) => write!(f, "Error reading command: {e}"),
-            Error::WritePrompt(e) => write!(f, "Error writing prompt: {e}"),
+            Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::ReadLines(e) => write!(f, "Error reading input lines: {e}"),
-            Error::ParseCmd(e) => write!(f, "Error parsing command input: {e}"),
+            Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
             Error::Other(s) => write!(f, "Error: {s}"),
         }
     }
@@ -36,15 +36,17 @@ where
     W: Write,
 {
     // Initialize Buffers
-    let buffers = initialize_buffers(args)?;
+    let mut buffers = initialize_buffers(args)?;
 
     // Initialize context (e.g., current buffer)
-    let mut _current_buffer = 0;
+    let current_buffer = 0;
     let mut cmd_buf = String::new();
     let mut prev_command: Option<Cmd> = None;
+    let mut previous_pattern: Option<regex::Regex> = None;
 
     // Accept and process commands until fatal error or exit
-    loop {
+    let mut done = false;
+    while !done {
         // write prompt
         write_prompt(&mut output)?;
 
@@ -52,26 +54,64 @@ where
         cmd_buf.clear();
         read_command(&mut input, &mut cmd_buf)?;
 
-        // parse command
-        let cmd = cmd_buf.parse::<Cmd>().map_err(Error::ParseCmd);
+        let mut cmd_chars = cmd_buf.chars().peekable();
 
-        // handle possible parse error
-        if let Err(e) = cmd {
+        done = Cmd::parse(
+            &mut cmd_chars,
+            &mut buffers[current_buffer],
+            &mut previous_pattern,
+        )
+        .map_err(Error::ParseCmd)
+        .and_then(|cmd| match cmd {
+            // execute command
+            //   Commands that act on text in buffers or on an individual buffer state are
+            //   passed on to the current buffer to execute. Commands that act on editor state
+            //   (e.g., quit, edit, buffer) are executed directly here.
+            Cmd::Quit => Ok(ok_to_exit(&mut prev_command, &buffers)),
+            Cmd::Print(address) => print_cmd(&mut output, address, &mut buffers[current_buffer]),
+            Cmd::Null(_address) => todo!(),
+        })
+        .or_else(|e| {
             eprintln!("{e}");
-            continue;
-        }
+            Ok(false)
+        })?;
+    }
+    Ok(())
+}
 
-        // execute command
-        match cmd.unwrap() {
-            Cmd::Quit => {
-                if ok_to_exit(&mut prev_command, &buffers) {
-                    return Ok(());
-                }
+fn print_cmd<W>(
+    output: &mut W,
+    address: Option<Address>,
+    buffer: &mut EditBuffer,
+) -> Result<bool, Error>
+where
+    W: Write,
+{
+    match address {
+        Some(Address::Line(n)) => {
+            output
+                .write_all(buffer[n].as_bytes())
+                .map_err(Error::WriteOutput)?;
+            buffer.set_current_line(n);
+        }
+        Some(Address::Span(first, last)) => {
+            for l in &buffer[first..=last] {
+                output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
             }
-            Cmd::Print(_addr_chain) => todo!(),
-            Cmd::Null(_addr_chain) => todo!(),
+            buffer.set_current_line(last);
+        }
+        None => {
+            if buffer.current_line() == 0 {
+                return Err(Error::ParseCmd(command::Error::InvalidLineNumber));
+            }
+            output
+                .write_all(buffer[buffer.current_line()].as_bytes())
+                .map_err(Error::WriteOutput)?;
         }
     }
+    output.write(b"\n").map_err(Error::WriteOutput)?;
+    output.flush().map_err(Error::WriteOutput)?;
+    Ok(false)
 }
 
 fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> bool {
@@ -90,8 +130,8 @@ fn write_prompt<W>(output: &mut W) -> Result<(), Error>
 where
     W: Write,
 {
-    write!(output, ":").map_err(Error::WritePrompt)?;
-    output.flush().map_err(Error::WritePrompt)?;
+    write!(output, ":").map_err(Error::WriteOutput)?;
+    output.flush().map_err(Error::WriteOutput)?;
     Ok(())
 }
 
@@ -178,7 +218,7 @@ mod tests {
     fn write_prompt_io_error_gives_correct_error() {
         let mut output = BadWriter {};
         let _res = write_prompt(&mut output);
-        assert!(matches!(Err::<Error, _>(Error::WritePrompt), _res));
+        assert!(matches!(Err::<Error, _>(Error::WriteOutput), _res));
     }
 
     #[test]
@@ -278,5 +318,48 @@ mod tests {
         let buffers = vec![EditBuffer::new()];
         let safe = ok_to_exit(&mut prev_cmd, &buffers);
         assert!(safe);
+    }
+
+    #[test]
+    fn print_cmd_no_addr() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res = print_cmd(&mut output, None, &mut buffer).expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"2\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_single_line() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        buffer.set_current_line(2);
+        let res =
+            print_cmd(&mut output, Some(Address::Line(3)), &mut buffer).expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"3\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_span() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(5);
+        let res = print_cmd(&mut output, Some(Address::Span(2, 4)), &mut buffer)
+            .expect("successful print");
+        assert_eq!(false, res);
+        assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
+    }
+
+    #[test]
+    fn print_cmd_empty_buffer_gives_error() {
+        let mut output = Vec::new();
+        let mut buffer = EditBuffer::new();
+        let res = print_cmd(&mut output, None, &mut buffer);
+        assert!(match res {
+            Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
+            _ => false,
+        });
     }
 }

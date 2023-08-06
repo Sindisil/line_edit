@@ -1,16 +1,21 @@
+// EditBuffer keeps track of everything specific to a single buffer in the
+// editor. All public interface uses one based indexing, and any such function
+// is responsible for translating into the 0 based indexing of the Vec<String>
+// containing the lines of text.
+
 use core::cmp::Ordering;
-use core::fmt;
-use core::ops::Deref;
+use core::fmt::{self, Display, Formatter};
+use core::ops::{Deref, Index, Range, RangeFrom, RangeInclusive};
 use core::slice::Iter;
-use std::io::{self, prelude::*};
-use std::path;
+use std::io::{self, BufRead};
+use std::path::PathBuf;
 
 #[derive(Debug, PartialEq)]
 pub struct EditBuffer {
     text: Vec<String>,
     needs_write: bool,
-    cur_line: usize,
-    default_filename: Option<path::PathBuf>,
+    current_line: usize,
+    default_filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
 }
 
@@ -22,8 +27,8 @@ pub enum Error {
 
 impl std::error::Error for Error {}
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Error::Read(e) => write!(f, "error reading lines: {e}"),
             Error::ReadBadIndex(sz, i) => write!(
@@ -49,14 +54,54 @@ impl From<Vec<&str>> for EditBuffer {
             .iter()
             .map(|v| {
                 let mut line = v.to_string();
-                if !(line.ends_with("\r\n") || line.ends_with("\n")) {
+                if !(line.ends_with("\r\n") || line.ends_with('\n')) {
                     line.push_str(default_eol.as_ref());
                 }
                 line
             })
             .collect::<Vec<String>>();
         buf.text.append(&mut value);
+        buf.current_line = buf.text.len();
         buf
+    }
+}
+
+impl Index<usize> for EditBuffer {
+    type Output = String;
+
+    #[inline]
+    fn index(&self, index: usize) -> &String {
+        self.get(index).expect("Out of bounds access")
+    }
+}
+
+impl Index<Range<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: Range<usize>) -> &[String] {
+        assert!(index.start > 0 && index.end > 0, "Invalid range");
+        &self.text[index.start - 1..index.end - 1]
+    }
+}
+
+impl Index<RangeInclusive<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: RangeInclusive<usize>) -> &[String] {
+        assert!(*index.start() > 0 && *index.end() > 0, "Invalid range");
+        &self.text[*index.start() - 1..=*index.end() - 1]
+    }
+}
+
+impl Index<RangeFrom<usize>> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: RangeFrom<usize>) -> &[String] {
+        assert!(index.start > 0, "Invalid range");
+        &self.text[index.start - 1..]
     }
 }
 
@@ -72,7 +117,7 @@ impl EditBuffer {
         EditBuffer {
             text: Vec::new(),
             needs_write: false,
-            cur_line: 0,
+            current_line: 0,
             default_filename: None,
             default_eol: None,
         }
@@ -99,6 +144,7 @@ impl EditBuffer {
         }
     }
 
+    #[must_use]
     /// Returns this `EditBuffer`'s capacity, in bytes.
     pub fn capacity(&self) -> usize {
         self.text.capacity()
@@ -116,6 +162,25 @@ impl EditBuffer {
     /// Returns true if buffer has been changed since last write.
     pub fn needs_write(&self) -> bool {
         self.needs_write
+    }
+
+    pub fn current_line(&self) -> usize {
+        self.current_line
+    }
+
+    pub fn set_current_line(&mut self, line: usize) {
+        if line == 0 || line > self.text.len() {
+            panic!("{line} is an invalid index (0-{})", self.len());
+        } else {
+            self.current_line = line;
+        }
+    }
+
+    pub fn get(&self, index: usize) -> Option<&String> {
+        match index {
+            0 => None,
+            _ => self.text.get(index - 1),
+        }
     }
 
     /// Reads lines from reader into the buffer at the specified line.
@@ -136,7 +201,7 @@ impl EditBuffer {
     /// Returns index of last line read, or an error if read fails
     pub fn read<R>(&mut self, at_line: usize, mut reader: R) -> Result<usize, Error>
     where
-        R: io::BufRead,
+        R: BufRead,
     {
         if at_line > self.text.len() {
             return Err(Error::ReadBadIndex(self.len(), at_line));
@@ -171,15 +236,16 @@ impl EditBuffer {
                 let i = lines.len() - 1;
                 &mut lines[i]
             };
-            if !(last_line.ends_with("\r\n") || last_line.ends_with("\n")) {
+            if !(last_line.ends_with("\r\n") || last_line.ends_with('\n')) {
                 last_line.push_str(default_eol.as_ref());
             }
         }
 
         // actually add new lines to buffer
-        self.text.splice(at_line..at_line, lines.into_iter());
+        self.text.splice(at_line..at_line, lines);
         self.needs_write = true;
-        Ok(at_line + lines_added - 1)
+        self.current_line = at_line + lines_added;
+        Ok(self.current_line)
     }
 
     fn iter(&self) -> Iter<'_, String> {
@@ -225,6 +291,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::io::{BufReader, Read};
 
     struct BadReader {}
 
@@ -337,9 +405,22 @@ mod tests {
                     .read($at, &input[..])
                     .expect("Error reading added lines");
 
-                assert_eq!($expect, buffer.text);
-                assert_eq!($last_read, last_read);
-                    assert_eq!(true, buffer.needs_write());
+                assert_eq!($expect,
+                        buffer.text,
+                        "expected text: {:?}, got {:?}", $expect, &buffer.text
+                );
+                assert_eq!($last_read,
+                        last_read,
+                        "expected last_read {}, got {}", $last_read, last_read
+                );
+                assert_eq!(true,
+                        buffer.needs_write(),
+                        "expected buffer needs write, got {}", buffer.needs_write()
+                );
+                assert_eq!($last_read,
+                        buffer.current_line(),
+                        "expected current_line: {}, got {}", $last_read, buffer.current_line()
+                );
             }
         };
     }
@@ -350,7 +431,7 @@ mod tests {
         added: vec!["Line1\n", "Line2\n", "Line3\n",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3\n",],
-        last line read: 2,
+        last line read: 3,
     }
 
     read_test! {
@@ -359,7 +440,7 @@ mod tests {
         added: vec!["Line1\n", "Line2\n", "Line3",],
         at: 0,
         expect: vec!["Line1\n", "Line2\n", "Line3",],
-        last line read: 2,
+        last line read: 3,
     }
 
     read_test! {
@@ -370,7 +451,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     read_test! {
@@ -381,7 +462,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\r\n", "Line3\n", "Line4\n", "New1\n", "New2\n", "New3",
         ],
-        last line read: 6,
+        last line read: 7,
     }
 
     read_test! {
@@ -392,7 +473,7 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\n", "Line4\r\n", "New1\r\n", "New2\n", "New3",
         ],
-        last line read: 6,
+        last line read: 7,
     }
 
     read_test! {
@@ -403,7 +484,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "Line3\n", "New1\n", "New2\n", "New3\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     read_test! {
@@ -414,7 +495,7 @@ mod tests {
         expect: vec![
             "Line1\r\n", "Line2\r\n", "Line3\r\n", "New1\r\n", "New2\r\n", "New3\r\n",
         ],
-        last line read: 5,
+        last line read: 6,
     }
 
     #[test]
@@ -440,7 +521,7 @@ mod tests {
             "New3",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(5, last_read);
+        assert_eq!(6, last_read);
         assert_eq!(true, buffer.needs_write());
     }
 
@@ -452,7 +533,7 @@ mod tests {
         expect: vec![
             "Line1\n", "Line2\n", "New1\n", "New2\n", "New3\n", "Line3\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -469,7 +550,7 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -486,7 +567,7 @@ mod tests {
             "Line3\n",
             "Line4\r\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -503,7 +584,7 @@ mod tests {
             "Line3\n",
             "Line4\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     read_test! {
@@ -520,7 +601,7 @@ mod tests {
             "Line3\r\n",
             "Line4\r\n",
         ],
-        last line read: 4,
+        last line read: 5,
     }
 
     #[test]
@@ -547,7 +628,7 @@ mod tests {
             "Line4\r\n",
         ];
         assert_eq!(expect, buffer.text);
-        assert_eq!(4, last_read);
+        assert_eq!(5, last_read);
         assert_eq!(true, buffer.needs_write());
     }
 
@@ -563,9 +644,128 @@ mod tests {
     #[test]
     fn read_with_io_error() {
         let reader = BadReader {};
-        let mut input = io::BufReader::new(reader);
+        let mut input = BufReader::new(reader);
         let mut buffer = EditBuffer::new();
         let _res = buffer.read(0, &mut input);
         assert!(matches!(Err::<Error, _>(Error::Read), _res));
+    }
+
+    ////
+    // Indexing tests
+
+    #[test]
+    fn usize_index() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!("1\n", buffer[1]);
+        assert_eq!("6\n", buffer[6]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_index_panics() {
+        let buffer = EditBuffer::from(vec!["1"]);
+        let _ = &buffer[0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn index_too_large_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[4];
+    }
+
+    #[test]
+    fn range_index() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..5]);
+        assert_eq!(vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"], buffer[1..7]);
+    }
+
+    #[test]
+    fn range_inclusive_index() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["2\n", "3\n", "4\n"], buffer[2..=4]);
+        assert_eq!(
+            vec!["1\n", "2\n", "3\n", "4\n", "5\n", "6\n"],
+            buffer[1..=6]
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[0..2];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_inclusive_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[0..=1];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_terminated_range_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[1..0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_terminated_range_inclusive_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2"]);
+        let _ = &buffer[1..=0];
+    }
+
+    #[test]
+    #[should_panic]
+    fn range_too_far_beyond_end_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[3..5];
+    }
+
+    #[test]
+    #[should_panic]
+    fn range_inclusive_beyond_end_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[3..=4];
+    }
+
+    #[test]
+    fn range_from() {
+        let buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        assert_eq!(vec!["4\n", "5\n", "6\n"], buffer[4..]);
+        assert_eq!(vec!["6\n"], buffer[6..]);
+        assert!(buffer[7..].is_empty());
+    }
+
+    #[test]
+    #[should_panic]
+    fn zero_based_range_from_panics() {
+        let buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        let _ = &buffer[0..];
+    }
+
+    #[test]
+    fn set_current_line() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(2);
+        assert_eq!(2, buffer.current_line());
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_current_line_bad_index() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn set_current_line_beyond_end() {
+        let mut buffer = EditBuffer::from(vec!["1", "2", "3"]);
+        buffer.set_current_line(99);
     }
 }
