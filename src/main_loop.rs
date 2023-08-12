@@ -62,10 +62,17 @@ where
             &mut previous_pattern,
         )
         .map_err(Error::ParseCmd)
-        .and_then(|cmd| match cmd {
+        .and_then(|ref mut cmd| match cmd {
             // dispatch command
             Cmd::Quit => do_quit(&mut prev_command, &buffers),
             Cmd::Print(address) => do_print(&mut output, address, &mut buffers[current_buffer]),
+            Cmd::Append(address, lines) => do_append(
+                &mut input,
+                &mut output,
+                &mut buffers[current_buffer],
+                address,
+                lines,
+            ),
             Cmd::Null(_address) => todo!(),
         })
         .or_else(|e| {
@@ -82,7 +89,7 @@ fn do_quit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> Result<boo
 
 fn do_print<W>(
     output: &mut W,
-    address: Option<Address>,
+    address: &Option<Address>,
     buffer: &mut EditBuffer,
 ) -> Result<bool, Error>
 where
@@ -91,15 +98,15 @@ where
     match address {
         Some(Address::Line(n)) => {
             output
-                .write_all(buffer[n].as_bytes())
+                .write_all(buffer[*n].as_bytes())
                 .map_err(Error::WriteOutput)?;
-            buffer.set_current_line(n);
+            buffer.set_current_line(*n);
         }
         Some(Address::Span(first, last)) => {
-            for l in &buffer[first..=last] {
+            for l in &buffer[*first..=*last] {
                 output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
             }
-            buffer.set_current_line(last);
+            buffer.set_current_line(*last);
         }
         None => {
             if buffer.current_line() == 0 {
@@ -113,6 +120,20 @@ where
     output.write(b"\n").map_err(Error::WriteOutput)?;
     output.flush().map_err(Error::WriteOutput)?;
     Ok(false)
+}
+
+fn do_append<R, W>(
+    input: &mut R,
+    output: &mut W,
+    buffer: &mut EditBuffer,
+    address: &Option<Address>,
+    lines: &mut Vec<String>,
+) -> Result<bool, Error>
+where
+    W: Write,
+    R: BufRead,
+{
+    todo!();
 }
 
 fn ok_to_exit(prev_command: &mut Option<Cmd>, buffers: &[EditBuffer]) -> bool {
@@ -326,7 +347,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
-        let res = do_print(&mut output, None, &mut buffer).expect("successful print");
+        let res = do_print(&mut output, &None, &mut buffer).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n\n", &output[..]);
     }
@@ -337,7 +358,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let res =
-            do_print(&mut output, Some(Address::Line(3)), &mut buffer).expect("successful print");
+            do_print(&mut output, &Some(Address::Line(3)), &mut buffer).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"3\r\n\n", &output[..]);
     }
@@ -347,7 +368,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
-        let res = do_print(&mut output, Some(Address::Span(2, 4)), &mut buffer)
+        let res = do_print(&mut output, &Some(Address::Span(2, 4)), &mut buffer)
             .expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
@@ -357,7 +378,7 @@ mod tests {
     fn do_print_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = do_print(&mut output, None, &mut buffer);
+        let res = do_print(&mut output, &None, &mut buffer);
         assert!(match res {
             Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
             _ => false,
