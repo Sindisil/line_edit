@@ -58,7 +58,8 @@ where
 
         done = Cmd::parse(
             &mut cmd_chars,
-            &mut buffers[current_buffer],
+            &mut buffers,
+            current_buffer,
             &mut previous_pattern,
         )
         .map_err(Error::ParseCmd)
@@ -66,17 +67,11 @@ where
             let res = match cmd {
                 // dispatch command
                 Cmd::Quit => do_quit(&prev_command, &buffers),
-                Cmd::Print(ref address) => {
-                    do_print(&mut output, address, &mut buffers[current_buffer])
+                Cmd::Print(i, ref address) => do_print(&mut output, &mut buffers[i], address),
+                Cmd::Append(i, ref address, ref mut lines) => {
+                    do_append(&mut input, &mut buffers[i], address, lines)
                 }
-                Cmd::Append(ref address, ref mut lines) => do_append(
-                    &mut input,
-                    &mut output,
-                    &mut buffers[current_buffer],
-                    address,
-                    lines,
-                ),
-                Cmd::Null(_address) => todo!(),
+                Cmd::Null(ref _buffer, _address) => todo!(),
             };
             prev_command = Some(cmd);
             res
@@ -95,8 +90,8 @@ fn do_quit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> Result<bool, E
 
 fn do_print<W>(
     output: &mut W,
-    address: &Option<Address>,
     buffer: &mut EditBuffer,
+    address: &Option<Address>,
 ) -> Result<bool, Error>
 where
     W: Write,
@@ -128,18 +123,25 @@ where
     Ok(false)
 }
 
-fn do_append<R, W>(
+fn do_append<R>(
     input: &mut R,
-    output: &mut W,
     buffer: &mut EditBuffer,
     address: &Option<Address>,
     lines: &mut Vec<String>,
 ) -> Result<bool, Error>
 where
-    W: Write,
     R: BufRead,
 {
-    todo!();
+    read_lines(input, lines)?;
+    let i = match address {
+        Some(Address::Line(line)) => *line,
+        Some(Address::Span(_, last)) => *last,
+        None => buffer.current_line(),
+    };
+    if !lines.is_empty() {
+        todo!("add append function to EditBuffer");
+    }
+    Ok(false)
 }
 
 fn ok_to_exit(prev_command: &Option<Cmd>, buffers: &[EditBuffer]) -> bool {
@@ -352,7 +354,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
-        let res = do_print(&mut output, &None, &mut buffer).expect("successful print");
+        let res = do_print(&mut output, &mut buffer, &None).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n\n", &output[..]);
     }
@@ -363,7 +365,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let res =
-            do_print(&mut output, &Some(Address::Line(3)), &mut buffer).expect("successful print");
+            do_print(&mut output, &mut buffer, &Some(Address::Line(3))).expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"3\r\n\n", &output[..]);
     }
@@ -373,7 +375,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
-        let res = do_print(&mut output, &Some(Address::Span(2, 4)), &mut buffer)
+        let res = do_print(&mut output, &mut buffer, &Some(Address::Span(2, 4)))
             .expect("successful print");
         assert_eq!(false, res);
         assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
@@ -383,7 +385,7 @@ mod tests {
     fn do_print_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let res = do_print(&mut output, &None, &mut buffer);
+        let res = do_print(&mut output, &mut buffer, &None);
         assert!(match res {
             Err(Error::ParseCmd(e)) => e == command::Error::InvalidLineNumber,
             _ => false,

@@ -48,7 +48,7 @@ impl Default for EditBuffer {
 impl From<Vec<&str>> for EditBuffer {
     fn from(value: Vec<&str>) -> Self {
         let mut buf = EditBuffer::with_capacity(value.len());
-        let default_eol = compute_default_eol(&value[..]);
+        let default_eol = compute_default_eol(value.iter());
         buf.default_eol = Some(default_eol);
         let mut value = value
             .iter()
@@ -221,7 +221,7 @@ impl EditBuffer {
 
         // set default_eol if neccessary
         if self.default_eol.is_none() {
-            self.default_eol = Some(compute_default_eol(&lines[..]));
+            self.default_eol = Some(compute_default_eol(&lines));
         }
 
         // Add in missing eol as needed
@@ -262,9 +262,10 @@ fn compute_native_eol() -> &'static str {
     }
 }
 
-fn compute_default_eol<S>(lines: &[S]) -> &'static str
+fn compute_default_eol<I, T>(lines: I) -> &'static str
 where
-    S: Deref<Target = str>,
+    I: IntoIterator<Item = T>,
+    T: AsRef<str>,
 {
     let native_eol = if std::env::consts::FAMILY == "windows" {
         "\r\n"
@@ -275,6 +276,7 @@ where
     let mut lf = 0;
 
     for line in lines {
+        let line = line.as_ref();
         if line.ends_with("\r\n") {
             crlf += 1;
         } else if line.ends_with('\n') {
@@ -713,6 +715,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[1..0];
@@ -720,6 +723,7 @@ mod tests {
 
     #[test]
     #[should_panic]
+    #[allow(clippy::reversed_empty_ranges)]
     fn zero_terminated_range_inclusive_panics() {
         let buffer = EditBuffer::from(vec!["1", "2"]);
         let _ = &buffer[1..=0];
