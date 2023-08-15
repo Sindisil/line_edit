@@ -391,8 +391,7 @@ mod tests {
         let mut buffers = vec![EditBuffer::new()];
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
-            .err()
-            .expect("an error indicating an unknown command");
+            .expect_err("an error indicating an unknown command");
         assert!(matches!(res, Error::Unknown(_)));
     }
 
@@ -1007,15 +1006,13 @@ mod tests {
     #[test]
     fn offset_too_large() {
         let mut input = "999999999999999999999999999".chars().peekable();
-        let _res = eval_addr_offsets(&mut input)
-            .err()
-            .expect("should be an error");
+        let _res = eval_addr_offsets(&mut input).expect_err("should be an error");
     }
 
     #[test]
     fn offset_too_small() {
         let mut input = "-999999999999999999999999999".chars().peekable();
-        let _res = eval_addr_offsets(&mut input).err().expect("an error");
+        let _res = eval_addr_offsets(&mut input).expect_err("an error");
         assert!(matches!(Error::OffsetTooSmall, _res));
     }
 

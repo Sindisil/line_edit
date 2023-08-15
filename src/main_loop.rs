@@ -133,7 +133,7 @@ where
     R: BufRead,
 {
     read_lines(input, lines)?;
-    let i = match address {
+    let _i = match address {
         Some(Address::Line(line)) => *line,
         Some(Address::Span(_, last)) => *last,
         None => buffer.current_line(),
@@ -335,17 +335,17 @@ mod tests {
 
     #[test]
     fn ok_to_exit_if_prev_cmd_was_quit() {
-        let mut prev_cmd = Some(Cmd::Quit);
+        let prev_cmd = Some(Cmd::Quit);
         let buffers = vec![EditBuffer::new()];
-        let safe = ok_to_exit(&mut prev_cmd, &buffers);
+        let safe = ok_to_exit(&prev_cmd, &buffers);
         assert!(safe);
     }
 
     #[test]
     fn ok_to_exit_if_buffer_unchanged() {
-        let mut prev_cmd = None;
+        let prev_cmd = None;
         let buffers = vec![EditBuffer::new()];
-        let safe = ok_to_exit(&mut prev_cmd, &buffers);
+        let safe = ok_to_exit(&prev_cmd, &buffers);
         assert!(safe);
     }
 
@@ -355,7 +355,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         buffer.set_current_line(2);
         let res = do_print(&mut output, &mut buffer, &None).expect("successful print");
-        assert_eq!(false, res);
+        assert!(!res);
         assert_eq!(b"2\r\n\n", &output[..]);
     }
 
@@ -366,7 +366,7 @@ mod tests {
         buffer.set_current_line(2);
         let res =
             do_print(&mut output, &mut buffer, &Some(Address::Line(3))).expect("successful print");
-        assert_eq!(false, res);
+        assert!(!res);
         assert_eq!(b"3\r\n\n", &output[..]);
     }
 
@@ -377,7 +377,7 @@ mod tests {
         buffer.set_current_line(5);
         let res = do_print(&mut output, &mut buffer, &Some(Address::Span(2, 4)))
             .expect("successful print");
-        assert_eq!(false, res);
+        assert!(!res);
         assert_eq!(b"2\r\n3\r\n4\r\n\n", &output[..]);
     }
 
