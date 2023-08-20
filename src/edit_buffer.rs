@@ -5,7 +5,7 @@
 
 use core::cmp::Ordering;
 use core::fmt::{self, Display, Formatter};
-use core::ops::{Deref, Index, Range, RangeFrom, RangeInclusive};
+use core::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use core::slice::Iter;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
@@ -103,6 +103,15 @@ impl Index<RangeFrom<usize>> for EditBuffer {
     fn index(&self, index: RangeFrom<usize>) -> &[String] {
         assert!(index.start > 0, "Invalid range");
         &self.text[index.start - 1..]
+    }
+}
+
+impl Index<RangeFull> for EditBuffer {
+    type Output = [String];
+
+    #[inline]
+    fn index(&self, index: RangeFull) -> &[String] {
+        &self.text[index]
     }
 }
 
@@ -303,6 +312,7 @@ mod tests {
     use super::*;
 
     use std::io::{BufReader, Read};
+    use std::ops::Deref;
 
     struct BadReader {}
 
@@ -699,6 +709,13 @@ mod tests {
     fn index_too_large_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[4];
+    }
+
+    #[test]
+    fn range_full() {
+        let content = vec!["1\n", "2\n", "3\n", "4\n"];
+        let buffer = EditBuffer::from(content.clone());
+        assert_eq!(content, buffer[..]);
     }
 
     #[test]
