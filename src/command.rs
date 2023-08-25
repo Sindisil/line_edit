@@ -12,10 +12,10 @@ use regex::Regex;
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
     Quit,
-    Null(usize, Option<Address>),
-    Print(usize, Option<Address>),
-    Append(usize, Option<Address>, Vec<String>),
-    Delete(usize, Option<Address>),
+    Null(Option<Address>),
+    Print(Option<Address>),
+    Append(Option<Address>, Vec<String>),
+    Delete(Option<Address>),
     Undo,
 }
 
@@ -64,24 +64,23 @@ impl Cmd {
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
         let address = eval_address(cmd_chars, &mut buffers[current_buffer], previous_pattern)?;
-        parse_cmd(cmd_chars, current_buffer, previous_pattern, address)
+        parse_cmd(cmd_chars, previous_pattern, address)
     }
 }
 
 fn parse_cmd(
     cmd_chars: &mut Peekable<Chars>,
-    current_buffer: usize,
     _previous_pattern: &mut Option<Regex>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     let cmd = cmd_chars.next_if(|c| *c != '\r' && *c != '\n');
     match cmd {
-        None => Ok(Cmd::Null(current_buffer, address)),
+        None => Ok(Cmd::Null(address)),
         Some('q') => parse_quit_cmd(cmd_chars, address),
-        Some('p') => parse_print_cmd(current_buffer, cmd_chars, address),
-        Some('a') => parse_append_cmd(current_buffer, cmd_chars, address),
-        Some('d') => parse_delete_cmd(current_buffer, cmd_chars, address),
-        Some('u') => parse_undo_cmd(current_buffer, cmd_chars, address),
+        Some('p') => parse_print_cmd(cmd_chars, address),
+        Some('a') => parse_append_cmd(cmd_chars, address),
+        Some('d') => parse_delete_cmd(cmd_chars, address),
+        Some('u') => parse_undo_cmd(cmd_chars, address),
         Some(c) => Err(Error::Unknown(c)),
     }
 }
@@ -97,60 +96,53 @@ fn parse_quit_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> 
 }
 
 fn parse_print_cmd(
-    current_buffer: usize,
     cmd_chars: &mut Peekable<Chars>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Print(current_buffer, address)),
+        None | Some('\n') => Ok(Cmd::Print(address)),
         Some('\r') => {
             cmd_chars.next();
-            parse_print_cmd(current_buffer, cmd_chars, address)
+            parse_print_cmd(cmd_chars, address)
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
 fn parse_append_cmd(
-    current_buffer: usize,
     cmd_chars: &mut Peekable<Chars>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Append(current_buffer, address, Vec::new())),
+        None | Some('\n') => Ok(Cmd::Append(address, Vec::new())),
         Some('r') => {
             cmd_chars.next();
-            parse_append_cmd(current_buffer, cmd_chars, address)
+            parse_append_cmd(cmd_chars, address)
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
 fn parse_delete_cmd(
-    current_buffer: usize,
     cmd_chars: &mut Peekable<Chars>,
     address: Option<Address>,
 ) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
-        None | Some('\n') => Ok(Cmd::Delete(current_buffer, address)),
+        None | Some('\n') => Ok(Cmd::Delete(address)),
         Some('\r') => {
             cmd_chars.next();
-            parse_delete_cmd(current_buffer, cmd_chars, address)
+            parse_delete_cmd(cmd_chars, address)
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
 }
 
-fn parse_undo_cmd(
-    current_buffer: usize,
-    cmd_chars: &mut Peekable<Chars>,
-    address: Option<Address>,
-) -> Result<Cmd, Error> {
+fn parse_undo_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
     match cmd_chars.peek() {
         None | Some('\n') => Ok(Cmd::Undo),
         Some('\r') => {
             cmd_chars.next();
-            parse_delete_cmd(current_buffer, cmd_chars, address)
+            parse_delete_cmd(cmd_chars, address)
         }
         _ => Err(Error::InvalidCmdSuffix),
     }
@@ -445,7 +437,7 @@ mod tests {
         let mut input = "\n".chars().peekable();
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("a successful parse");
-        assert_eq!(Cmd::Null(0, None), res);
+        assert_eq!(Cmd::Null(None), res);
     }
 
     #[test]
@@ -456,7 +448,7 @@ mod tests {
         buffers[0].set_current_line(2);
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(0, None), res);
+        assert_eq!(Cmd::Null(None), res);
     }
 
     #[test]
@@ -467,7 +459,7 @@ mod tests {
         assert_eq!(3, buffers[0].current_line());
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed command");
-        assert_eq!(Cmd::Null(0, Some(Address::Line(2))), res);
+        assert_eq!(Cmd::Null(Some(Address::Line(2))), res);
     }
 
     #[test]
@@ -507,7 +499,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res = Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern)
             .expect("parsed print cmd");
-        assert_eq!(Cmd::Print(0, None), res);
+        assert_eq!(Cmd::Print(None), res);
     }
 
     #[test]
@@ -527,7 +519,7 @@ mod tests {
         let mut previous_pattern: Option<Regex> = None;
         let res =
             Cmd::parse(&mut input, &mut buffers, 0, &mut previous_pattern).expect("parsed cmd");
-        assert_eq!(Cmd::Append(0, None, Vec::new()), res);
+        assert_eq!(Cmd::Append(None, Vec::new()), res);
     }
 
     #[test]

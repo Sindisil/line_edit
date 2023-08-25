@@ -63,14 +63,24 @@ where
         .map_err(Error::ParseCmd)
         .and_then(|mut cmd| {
             let res = match cmd {
+                // TODO:
+                //  - Move buffer specific commands into methods of EditBuffer
+                //  - Dispatch those commands to the current buffer
+                //  - Organize match arms here into App (e.t., quit, edit, switch buffer)
+                //    and Buffer (e.g., print, append, write).
+                //  - Remove buffer index from Cmd -- shouldn't be needed.
                 // dispatch command
                 Cmd::Quit => do_quit(&prev_command, &buffers),
-                Cmd::Null(i, ref address) => do_null(&mut output, &mut buffers[i], address),
-                Cmd::Print(i, ref address) => do_print(&mut output, &mut buffers[i], address),
-                Cmd::Append(i, ref address, ref mut lines) => {
-                    do_append(&mut input, &mut buffers[i], address, lines)
+                Cmd::Null(ref address) => {
+                    do_null(&mut output, &mut buffers[current_buffer], address)
                 }
-                Cmd::Delete(i, ref address) => do_delete(&mut buffers[i], address),
+                Cmd::Print(ref address) => {
+                    do_print(&mut output, &mut buffers[current_buffer], address)
+                }
+                Cmd::Append(ref address, ref mut lines) => {
+                    do_append(&mut input, &mut buffers[current_buffer], address, lines)
+                }
+                Cmd::Delete(ref address) => do_delete(&mut buffers[current_buffer], address),
                 Cmd::Undo => do_undo(),
             };
             prev_command = Some(cmd);
@@ -412,7 +422,7 @@ mod tests {
         let res =
             do_append(&input[..], &mut buffers[0], &None, &mut lines).expect("successful append");
         assert!(!res);
-        let mut prev_command = Some(Cmd::Append(0, Some(Address::Line(0)), lines));
+        let mut prev_command = Some(Cmd::Append(Some(Address::Line(0)), lines));
         let res = do_quit(&prev_command, &buffers).expect("no error");
         prev_command = Some(Cmd::Quit);
         assert!(!res);
