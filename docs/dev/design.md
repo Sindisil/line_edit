@@ -56,113 +56,28 @@ with other editors). It provides simpler implementation in some ways, and would 
 less "spooky action at a distance" (i.e., either switching buffers or causing changes
 in other than the current active buffer).
 
-It is increasingly seeming that the current abstractions aren't quite right, though. Right
-now we have the following:
+After looking at other editors, definately track per buffer.
 
- * main_loop
-   - contains the vector of EditBuffers
-   - interprets commands, interacting with buffers as needed
- * EditBuffer
-   - contains the actual text
-   - provides operations on the text
-   - tracks current_line and the buffers's dirty status (needs_write)
+#### Undo/Redo model
 
-This is awkward for undo/redo, as they are per buffer (so should probably live in EditBuffer),
-but seem easiest to define in terms of Cmds, which main_loop currently translates into
-operations on EditBuffer.
+For simplicity, we'll use a two stack model: undo stack for the linear history, redo stack for ... well, undoing undos.
 
-One solution would be to track undo/redo stacks in parallel with EditBuffers, and probably also
-track buffer dirty status in parallel, as well. This feels a bit hacky, but would be pretty
-simple to implement, would not require any signficant refactoring of the current code, and
-should be rather performant (though I doubt any differene would be significant in lned's case).
+To ensure no loss of history, if an undoable edit action is executed while there are items on the redo stack (i.e., after the user has used undo one or more times), those items are played back onto the undo stack both forwards and backwards (to track the original edits and the undo actions).
 
-Another option is to add another layer of abstraction, which would provide for separation of concerns,
-and maybe make it easier to tell where to put (and find) specific functionality.
+### Command model
 
-  * main_loop
-    - contain vector of EditBuffer
-    - interpret non-buffer specific commands (primarily quit and the buffer manipulation comands).
-    - could still interpret buffer specific commands, but could instead pass them along to
-      the correct EditBuffer (typically the active_buffer).
-  * EditBuffer
-    - contain's TextBuffer
-    - contains undo/redo stacks
-    - tracks current_line & dirty status
-    - possibly (probably) interprets buffer specific commands, interacting with TextBuffer as
-      necessary. Otherwise could simply provide a reference to the TextBuffer if main_loop
-      would still interpret the commands.
-  * TextBuffer
-    - contains actual text
-    - provides operations on the text lines
-    - provides I/O operations for the text content
-    - probably doesn't need to track needs_write anymore
+I orginally used an enum to define commands, because it was simple, worked, and ensured full coveage of all commands at key points.
 
-Both options seem viable. I'll make a decision when I implement undo/redo, right after the first
-opposing commands are complete (append & delete).
+However I may want to move away from that in order to properly support the undo/redo model. For each command, lned needs to be able to:
 
+1. Store the necessary data (e.g., address, target, lines of input, etc.) associated with normal execution.
+2. Define the code to actually perform the command's action.
+3. Produce the inverse commadn for use by undo. This would need to include items 1 & 2, above, but for the inverse of the original command.
+4. Produce the original command again later, for use by redo (could store orignal, could construct from undo info).
 
-## Data Types
+There are multiple ways to do this, of course, but it seems like storing the data in the enum and then writing free functions to implement everything is messier than necessary.
 
-struct CmdArgs {
-  files: Vec
-}
+One option would be to define each command as a struct containing the pertinent data items, then implement Execute (or Do), Undo, and Redo traits for each. This loses the ability to check statically that we're covering every command, but that might be an acceptable tradeoff.
 
-struct EditBuffer {
-  lines: Vec<String>;
-  filename: Option<PathBuf>;
-  current_line: usize;
-}
+It might still be worthwhile to have a CommandType or CommandId enum, but it might not add enough value.
 
-enum Cmd {
-  Quit,
-  File(Option<PathBuf>),
-  Edit(Option<PathBuf>),
-}
-
-## Design
-
-main() {
-  args = parse_command_line()
-  main_loop(&args)
-}
-
-main_loop(args) {
-  initialize_buffers(&buffers, &args.files)
-  current_buffer = &buffers[0]
-  cmd_input: String
-  Loop {
-    show_prompt(stdout.lock(), current_buffer)
-    accept_command(stdin.lock(), &cmd_input)
-    cmd = parse_command(&cmd_input)?
-    match &cmd {
-      Cmd::Quit => {
-        // clean up and exit
-      },
-      _ => {
-        // unsupported command
-      }
-    }
-  }
-}
-
-initialize_buffers(buffers, files) {
-  for file in args.files {
-    buffers.add(create_buffer(Some(file)))
-  }
-  if buffers.is_empty() {
-    buffers.add(create_buffer(None))
-  }
-}
-
-show_prompt(writer, bufferuffer) {
-  // will eventually test for changed buffer
-  write(writer, ':')
-}
-accept_command(reader, cmd_input) {
-  cmd_input.clear()
-  read_str(reader, &cmd_input)
-}
-
-parse_command(cmd_input) -> Result<Cmd> {
-  // parse the command string
-}
