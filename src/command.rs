@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(Error::OffsetTooLarge, res);
     }
 
-    ////
+    /////
     // parse_pattern tests
 
     #[test]

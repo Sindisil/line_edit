@@ -68,7 +68,7 @@ where
 
                 // Otherwise must be a buffer command, so delegate to current buffer
                 _ => buffers[current_buffer]
-                    .do_cmd(cmd.clone(), &mut input, &mut output)
+                    .do_user_cmd(cmd.clone(), &mut input, &mut output)
                     .map_err(Error::BufferCmd)
                     .and(Ok(false)),
             };
@@ -165,7 +165,7 @@ mod tests {
         }
     }
 
-    ////
+    /////
     // write_prompt() tests
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(b":", &output[..]);
     }
 
-    ////
+    /////
     // read_command() tests
 
     #[test]
@@ -205,7 +205,7 @@ mod tests {
         assert_eq!(cmd_input.trim(), cmd_ret.trim());
     }
 
-    ////
+    /////
     // initialize_buffers() tests
     #[test]
 
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(0, buffers[0].len());
     }
 
-    ////
+    /////
     // ok_to_exit() tests
 
     #[test]
@@ -238,7 +238,7 @@ mod tests {
         assert!(safe);
     }
 
-    ////
+    /////
     // Cmd tests
 
     #[test]
@@ -247,7 +247,7 @@ mod tests {
         let input = b"1\n2\n3\n.\n";
         let cmd = Cmd::Append(None, Vec::new());
         buffers[0]
-            .do_cmd(cmd.clone(), &input[..], &mut Vec::new())
+            .do_user_cmd(cmd.clone(), &mut &input[..], &mut Vec::new())
             .expect("appended lines");
         let mut prev_command = Some(cmd);
         let res = do_quit(&prev_command, &buffers).expect("no error");
