@@ -33,22 +33,43 @@ After testing several editors, they all consider a buffer dirty if there are any
 undone via the undo function. A few are even simpler, and consider it dirty after the
 first change -- even undo doesn't clear the flag.
 
-Lned implementation should probably be:
+There seem to be two major styles of dirty buffer detection:
 
+I. If there are any items on the undo stack since the last file write,
+   the buffer is considered dirty (regardless of whether the contents are
+   actually different or, as in the case where the changes have been
+   manually "undone", not).
+
+   For this case the clean fingerprint would a hash of the undo stack's
+   contents, and could optionally include the number of undo records to
+   allow for faster detection of a dirty buffer (check for differing
+   record count first, and compare hashes if counts are equal).
+
+   This method's performance isn't sensitive to file size, but will
+   consider a buffer that has been changed, but has been manually corrected
+   to match the clean state, to be dirty. This does, however, seem to be
+   the more widely used idiom.
+   
+II. If the file contents from after the last file write (or initial
+    buffer creation, as with the (e) command), it is considered dirty.
+    If not, not.
+
+   For this case, the snapshot would be a hash of the file contents,
+   and could optionally include the line count to allow for faster
+   detection of a changed file (check for differing line count first,
+   and if same, compare hashes).
+
+   This method may potentially lead to performance issues, since the entire
+   file must be hashed, rather than just the undo stack. However, since
+   most text files that are actually edited are quite small, this is unlikely
+   to occur in practice. It is also less commonly used: out of Nvim, Micro,
+   and VSCode, only VSCode uses this method. 
+
+After consideration, lned will use the more common idiom I.
 Update clean fingerprint after:
-1. initial file read to buffer
-2. new empty buffer
-3. after (e) command
-4. new buffer with content
-5. after (w) command, if whole buffer is written to default filename
-
-
-The buffer fingerprint contains:
-1. line count 
-2. total length
-3. hash of file
-
-A buffer is dirty if the current state doesn't match the fingerprint.
+1. buffer creation (from file or programmatic contents, or empty)
+2. buffer re-creation (via (e) command)
+3. after (w) command that writes the full buffer (i.e., address is equivalent to .,$).
 
 ### Undo/Redo
 
