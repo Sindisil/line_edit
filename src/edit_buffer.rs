@@ -398,6 +398,7 @@ impl EditBuffer {
         match cmd {
             Cmd::Append(ref address, ref mut lines) => self.do_append(input, address, lines),
             Cmd::Delete(ref address) => self.do_delete(address),
+            Cmd::Edit(ref filename) => todo!(),
             Cmd::Enumerate(ref address) => self.do_enumerate(output, address),
             Cmd::File(ref filename) => self.do_file(output, filename),
             Cmd::Null(ref address) => self.do_null(output, address),
