@@ -559,6 +559,14 @@ impl EditBuffer {
             }
         };
 
+        if *span.start() < 1
+            || *span.start() > self.len()
+            || *span.end() < 1
+            || *span.end() > self.len()
+        {
+            return Err(Error::InvalidAddress);
+        }
+
         let width = span.end().decimal_digits();
         let start = *span.start();
         self.current_line = *span.end();
@@ -637,6 +645,15 @@ impl EditBuffer {
                 self.current_line..=self.current_line
             }
         };
+
+        if *span.start() < 1
+            || *span.start() > self.len()
+            || *span.end() < 1
+            || *span.end() > self.len()
+        {
+            return Err(Error::InvalidAddress);
+        }
+
         self.current_line = *span.end();
         for l in &self[span] {
             output.write_all(l.as_bytes()).map_err(Error::WriteOutput)?;
@@ -1594,16 +1611,34 @@ mod tests {
             .do_cmd(Cmd::Null(None), &mut &b""[..], &mut output, &None)
             .expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
+        let res = buffer
+            .do_cmd(
+                Cmd::Null(Some(Address::Line(0))),
+                &mut &b""[..],
+                &mut output,
+                &None,
+            )
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
     fn do_user_cmd_enumerate_empty_buffer_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let _res = buffer
+        let res = buffer
             .do_user_cmd(Cmd::Enumerate(None), &mut &b""[..], &mut output, &None)
             .expect_err("invalid address");
-        assert!(matches!(Error::InvalidAddress, _res));
+        assert!(matches!(res, Error::InvalidAddress));
+        let res = buffer
+            .do_user_cmd(
+                Cmd::Enumerate(Some(Address::Line(1))),
+                &mut &b""[..],
+                &mut output,
+                &None,
+            )
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
@@ -1754,10 +1789,19 @@ mod tests {
     fn do_cmd_print_empty_buffer_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::new();
-        let _res = buffer
+        let res = buffer
             .do_cmd(Cmd::Print(None), &mut &b""[..], &mut output, &None)
             .expect_err("invalid address");
-        assert!(matches!(Error::InvalidAddress, _res));
+        assert!(matches!(res, Error::InvalidAddress));
+        let res = buffer
+            .do_cmd(
+                Cmd::Print(Some(Address::Line(0))),
+                &mut &b""[..],
+                &mut output,
+                &None,
+            )
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 
     #[test]
