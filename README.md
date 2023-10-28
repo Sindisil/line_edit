@@ -29,5 +29,5 @@ My hope is that lned will actually become a useful development tool,
 though I suspect that the line-based nature will put an upper bound
 on how productive it will feel. Perhaps, if I'm still interested, I
 will then move on to writing a screen based editor, or I if my editor
-implemtation itch has been scratched , I may instead go back to using
-some other editor .
+implemtation itch has been scratched, I may instead go back to using
+some other editor.
