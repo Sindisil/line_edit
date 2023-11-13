@@ -376,7 +376,7 @@ impl EditBuffer {
 
                 self.read_replace(output, source, data)
             }
-            Op::Inverse(_) => self.revert(output, op),
+            Op::Inverse(inner) => self.revert(output, inner),
         }
     }
 
@@ -407,7 +407,7 @@ impl EditBuffer {
                 self.current_line = data.current_line;
                 Ok(())
             }
-            Op::Inverse(_) => self.execute(output, op),
+            Op::Inverse(inner) => self.execute(output, inner),
         }
     }
 

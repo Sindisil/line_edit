@@ -51,6 +51,18 @@ impl UndoStack {
     pub fn push_undo(&mut self, mut item: Undoable) {
         if item.is_new {
             item.is_new = false;
+            if !self.redo.is_empty() {
+                for item in self.redo.iter().rev() {
+                    self.undo.push(item.undo.clone());
+                }
+
+                for item in self.redo.drain(..) {
+                    self.undo.push(Undoable {
+                        op: Op::Inverse(Box::new(item.undo.op)),
+                        is_new: false,
+                    });
+                }
+            }
         }
         self.undo.push(item);
     }
@@ -71,5 +83,16 @@ impl UndoStack {
         let mut h = DefaultHasher::new();
         self.undo.hash(&mut h);
         h.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_new_undo_stack() {
+        let s = UndoStack::new();
+        assert!(s.is_empty());
     }
 }
