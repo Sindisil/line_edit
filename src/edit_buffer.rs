@@ -757,6 +757,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn read_line_io_error_gives_correct_error() {
+        let input = BadReader {};
+        let mut input = BufReader::new(input);
+        let mut lines = Vec::new();
+        let _line_count = read_lines(&mut input, &mut lines);
+        assert!(matches!(Err::<Error, _>(Error::ReadLines), _line_count));
+    }
+
+    #[test]
+    fn read_lines_with_no_input_gives_zero_lines() {
+        let input = b".\n";
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+        assert_eq!(0, line_count);
+        assert_eq!(0, lines.len());
+    }
+
+    #[test]
+    fn read_lines_returns_lines_entered() {
+        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\n"];
+        let mut input = Vec::new();
+        for line in &three_lines {
+            input.extend(line.as_bytes());
+        }
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+
+        assert_eq!(3, line_count);
+        assert_eq!(3, lines.len());
+        assert_eq!(three_lines[..3], lines);
+    }
+
+    #[test]
+    fn read_lines_returns_lines_entered_crlf() {
+        let three_lines = vec!["line1\n", "line 2\n", "line 3\n", ".\r\n"];
+        let mut input = Vec::new();
+        for line in &three_lines {
+            input.extend(line.as_bytes());
+        }
+        let mut lines = Vec::new();
+        let line_count = read_lines(&mut &input[..], &mut lines).expect("Error reading lines");
+
+        assert_eq!(3, line_count);
+        assert_eq!(3, lines.len());
+        assert_eq!(three_lines[..3], lines);
+    }
+
     // write() tests
 
     #[test]
