@@ -3,11 +3,11 @@ use std::io::{self, BufRead};
 use std::iter::Iterator;
 use std::path::PathBuf;
 
-use unicode_segmentation::UnicodeSegmentation;
-
 use crate::edit_buffer::EditBuffer;
+use crate::str_utils::StrUtils;
 
 use regex::Regex;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 pub struct Parser {
@@ -45,6 +45,7 @@ pub enum Error {
     InvalidCmdSuffix,
     InvalidFilename,
     ReadCommand(io::Error),
+    MissingEol,
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -78,6 +79,7 @@ impl Display for Error {
             Error::InvalidCmdSuffix => write!(f, "invalid command suffix"),
             Error::InvalidFilename => write!(f, "invalid filename"),
             Error::ReadCommand(e) => write!(f, "{e} reading command input"),
+            Error::MissingEol => write!(f, "missing line terminator"),
         }
     }
 }
@@ -139,14 +141,22 @@ where
 }
 
 fn eval_address<'a, 'b, I>(
-    _cmd_line: &'a mut I,
+    cmd_line: &'a mut I,
     _buffer: &mut EditBuffer,
     _previous_pattern: &mut Option<Regex>,
 ) -> Result<(Option<Address>, Option<char>), Error>
 where
     I: Iterator<Item = &'b str>,
 {
-    todo!();
+    let mut left_addr: Option<Address> = None;
+    loop {
+        match cmd_line.next() {
+            Some(s) if s.is_blank() => (),
+            Some(s) if s == "\r\n" || s == "\n" => return Ok((None, None)),
+            Some(s) => return Ok((None, s.chars().next())),
+            None => return Err(Error::MissingEol),
+        }
+    }
 }
 
 //impl Cmd {
@@ -502,5 +512,165 @@ mod tests {
         let mut cmd_line = "\n".graphemes(true);
         let res = parse_no_args_cmd(&mut cmd_line, Cmd::Delete(None)).expect("parse ok");
         assert!(matches!(res, Cmd::Delete(None)));
+    }
+
+    #[test]
+    fn eval_no_addr_null_cmd() {
+        let mut cmd_line = "\r\n".graphemes(true);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
+        assert!(address.is_none());
+        assert!(cmd.is_none());
+        let mut cmd_line = "\n".graphemes(true);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
+        assert!(address.is_none());
+        assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn eval_no_addr_null_cmd_skip_spaces() {
+        let mut cmd_line = "\t  \r\n".graphemes(true);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
+        assert!(address.is_none());
+        assert!(cmd.is_none());
+        let mut cmd_line = "\n".graphemes(true);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
+        assert!(address.is_none());
+        assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn eval_addr_no_eol() {
+        let mut cmd_line = "".graphemes(true);
+        let res = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
+            .expect_err("mising line terminator");
+        assert!(matches!(res, Error::MissingEol));
+    }
+
+    #[test]
+    fn eval_no_addr() {
+        let mut cmd_line = "q\n".graphemes(true);
+        let (address, cmd) =
+            eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None).expect("good parse");
+        assert!(address.is_none());
+        assert!(matches!(cmd, Some('q')));
+    }
+
+    #[test]
+    fn parse_append_cmd_no_addr() {
+        let mut input = "a\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(matches!(res, Cmd::Append(None)));
+    }
+
+    #[test]
+    fn parse_delete_cmd_no_addr() {
+        let mut input = "d\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(
+            matches!(res, Cmd::Delete(None)),
+            "{res:?} didn't match Cmd::Delete(None)"
+        );
+    }
+
+    #[test]
+    fn parse_enumerate_cmd_no_addr() {
+        let mut input = "n\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(
+            matches!(res, Cmd::Enumerate(None)),
+            "{res:?} didn't match Cmd::Enumerate(None)"
+        );
+    }
+
+    #[test]
+    fn parse_null_cmd_no_addr() {
+        let mut input = "\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(matches!(res, Cmd::Null(None)));
+    }
+
+    #[test]
+    fn parse_print_cmd_no_addr() {
+        let mut input = "p\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(
+            matches!(res, Cmd::Print(None)),
+            "{res:?} didn't match Cmd::Print(None)"
+        );
+    }
+
+    #[test]
+    fn parse_quit_cmd() {
+        let mut input = "q\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(matches!(res, Cmd::Quit), "{res:?} didn't match Cmd::Quit");
+    }
+
+    #[test]
+    fn parse_undo_cmd() {
+        let mut input = "u\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(matches!(res, Cmd::Undo), "{res:?} didn't match Cmd::Undo");
+    }
+
+    #[test]
+    fn parse_redo_cmd() {
+        let mut input = "U\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect("good parse");
+        assert!(matches!(res, Cmd::Redo), "{res:?} didn't match Cmd::Redo");
+    }
+
+    #[test]
+    fn parse_quit_cmd_invalid_suffix() {
+        let mut input = "q/more stuff/\r\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect_err("invalid sufix");
+        assert!(
+            matches!(res, Error::InvalidCmdSuffix),
+            "{res:?} didn't match Error::InvalidCmdSuffix"
+        );
+    }
+
+    #[test]
+    fn parse_unknown_command() {
+        let mut input = "O\n".as_bytes();
+        let mut parser = Parser::new();
+        let res = parser
+            .parse(&mut input, &mut EditBuffer::new(), &mut None)
+            .expect_err("unknown cmd");
+        assert!(
+            matches!(res, Error::Unknown('O')),
+            "{res:?} didn't match Error::Unknown('O')"
+        );
     }
 }
