@@ -698,26 +698,40 @@ mod tests {
 
     #[test]
     fn parse_edit_with_address() {
-        todo!();
+        let cmd_line = " filename.rs".graphemes(true);
+        let res = parse_edit_cmd(cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
+        assert!(matches!(res, Error::UnexpectedAddress));
     }
 
     #[test]
     fn parse_edit_no_filename() {
-        todo!();
+        let cmd_line = "\n".graphemes(true);
+        let res = parse_edit_cmd(cmd_line, None).expect("parsed edit cmd");
+        assert!(matches!(res, Cmd::Edit(None)));
     }
 
     #[test]
     fn parse_edit_bad_filename() {
-        todo!();
+        let cmd_line = " \r\n".graphemes(true);
+        let res = parse_edit_cmd(cmd_line, None).expect_err("bad filename");
+        assert!(matches!(res, Error::InvalidFilename));
     }
 
     #[test]
     fn parse_edit_with_filename() {
-        todo!();
+        let cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_edit_cmd(cmd_line, None).expect("parsed edit cmd");
+let pb = PathBuf::from("a/filename.rs");
+        assert!(matches!(
+            res,
+            Cmd::Edit(Some(pb))
+        ));
     }
 
     #[test]
     fn parse_edit_invalid_suffix() {
-        todo!();
+        let cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_edit_cmd(cmd_line, None).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 }
