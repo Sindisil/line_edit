@@ -103,14 +103,14 @@ impl Parser {
             Some('a') => parse_no_args_cmd(cmd_line, Cmd::Append(address)),
             Some('d') => parse_no_args_cmd(cmd_line, Cmd::Delete(address)),
             Some('e') => parse_edit_cmd(cmd_line, address),
-            //            Some('f') => parse_file_cmd(mut cmd_line, address),
+            Some('f') => parse_file_cmd(cmd_line, address),
             Some('n') => parse_no_args_cmd(cmd_line, Cmd::Enumerate(address)),
             None => Ok(Cmd::Null(address)),
             Some('p') => parse_no_args_cmd(cmd_line, Cmd::Print(address)),
             Some('q') => parse_lone_cmd(cmd_line, address, Cmd::Quit),
             Some('u') => parse_lone_cmd(cmd_line, address, Cmd::Undo),
             Some('U') => parse_lone_cmd(cmd_line, address, Cmd::Redo),
-            //            Some('w') => parse_write_cmd(cmd_line, address),
+            Some('w') => parse_write_cmd(cmd_line, address),
             Some(c) => Err(Error::Unknown(c)),
         }
     }
@@ -156,6 +156,28 @@ where
                 Err(Error::InvalidFilename)
             } else {
                 Ok(Cmd::File(Some(PathBuf::from(filename))))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
+fn parse_write_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    match cmd_line.next() {
+        None | Some("\n" | "\r\n") => Ok(Cmd::Write(address, None)),
+        Some(s) if s.is_blank() => {
+            let filename = cmd_line
+                .take_while(|s| *s != "\n" && *s != "\r\n")
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::Write(address, Some(PathBuf::from(filename))))
             }
         }
         _ => Err(Error::InvalidCmdSuffix),
@@ -233,24 +255,6 @@ where
 //    }
 //
 //    filename.trim().to_owned()
-//}
-//
-//fn parse_write_cmd(
-//    cmd_chars: &mut Peekable<Chars>,
-//    address: Option<Address>,
-//) -> Result<Cmd, Error> {
-//    match cmd_chars.peek() {
-//        None | Some('\n' | '\r') => Ok(Cmd::Write(address, None)),
-//        Some(c) if c.is_blank() => {
-//            let filename = parse_filename(cmd_chars);
-//            if filename.is_empty() {
-//                Err(Error::InvalidFilename)
-//            } else {
-//                Ok(Cmd::Write(address, Some(PathBuf::from(filename))))
-//            }
-//        }
-//        _ => Err(Error::InvalidCmdSuffix),
-//    }
 //}
 //pub fn eval_address<'a>(
 //    cmd_line: &'a mut impl Iterator,
@@ -774,6 +778,48 @@ mod tests {
     fn parse_file_cmd_invalid_suffix() {
         let cmd_line = "filename.rs\n".graphemes(true);
         let res = parse_file_cmd(cmd_line, None).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
+    fn parse_write_cmd_with_address() {
+        let cmd_line = " filename.rs".graphemes(true);
+        let addr = Address(1, 10);
+        let res = parse_write_cmd(cmd_line, Some(addr)).expect("parsed write cmd");
+        assert!(
+            matches!(res, Cmd::Write(Some(a), Some(f)) if a == addr && f.to_str().unwrap() == "filename.rs")
+        );
+    }
+
+    #[test]
+    fn parse_write_cmd_no_filename() {
+        let cmd_line = "\n".graphemes(true);
+        let addr = Address(1, 10);
+        let res = parse_write_cmd(cmd_line, Some(addr)).expect("parsed file cmd");
+        assert!(matches!(res, Cmd::Write(Some(a), None) if a == addr));
+    }
+
+    #[test]
+    fn parse_write_cmd_bad_filename() {
+        let cmd_line = " \r\n".graphemes(true);
+        let res = parse_write_cmd(cmd_line, None).expect_err("bad filename");
+        assert!(matches!(res, Error::InvalidFilename));
+    }
+
+    #[test]
+    fn parse_write_cmd_with_filename() {
+        let cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_write_cmd(cmd_line, None).expect("parsed file cmd");
+        assert!(
+            matches!(&res, Cmd::Write(None, Some(f)) if f.to_str().unwrap() == "a/filename.rs"),
+            "{res:?} wasnt Cmd::Write(Some('filename.rs'))"
+        );
+    }
+
+    #[test]
+    fn parse_write_cmd_invalid_suffix() {
+        let cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_write_cmd(cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 }
