@@ -137,6 +137,31 @@ where
     }
 }
 
+fn parse_file_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if address.is_some() {
+        return Err(Error::UnexpectedAddress);
+    }
+    match cmd_line.next() {
+        None | Some("\n" | "\r\n") => Ok(Cmd::File(None)),
+        Some(s) if s.is_blank() => {
+            let filename = cmd_line
+                .take_while(|s| *s != "\n" && *s != "\r\n")
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if filename.is_empty() {
+                Err(Error::InvalidFilename)
+            } else {
+                Ok(Cmd::File(Some(PathBuf::from(filename))))
+            }
+        }
+        _ => Err(Error::InvalidCmdSuffix),
+    }
+}
+
 fn parse_edit_cmd<'a, I>(mut cmd_line: I, address: Option<Address>) -> Result<Cmd, Error>
 where
     I: Iterator<Item = &'a str>,
@@ -200,23 +225,6 @@ where
 //    }
 //}
 //
-//fn parse_file_cmd(cmd_chars: &mut Peekable<Chars>, address: Option<Address>) -> Result<Cmd, Error> {
-//    if address.is_some() {
-//        return Err(Error::UnexpectedAddress);
-//    }
-//    match cmd_chars.peek() {
-//        None | Some('\n' | '\r') => Ok(Cmd::File(None)),
-//        Some(c) if c.is_blank() => {
-//            let filename = parse_filename(cmd_chars);
-//            if filename.is_empty() {
-//                Err(Error::InvalidFilename)
-//            } else {
-//                Ok(Cmd::File(Some(PathBuf::from(filename))))
-//            }
-//        }
-//        _ => Err(Error::InvalidCmdSuffix),
-//    }
-//}
 //
 //fn parse_filename(cmd_chars: &mut Peekable<Chars>) -> String {
 //    let mut filename = String::new();
@@ -721,17 +729,51 @@ mod tests {
     fn parse_edit_with_filename() {
         let cmd_line = " a/filename.rs\r\n".graphemes(true);
         let res = parse_edit_cmd(cmd_line, None).expect("parsed edit cmd");
-let pb = PathBuf::from("a/filename.rs");
-        assert!(matches!(
-            res,
-            Cmd::Edit(Some(pb))
-        ));
+        assert!(matches!(&res, Cmd::Edit(Some(f)) if f.to_str().unwrap() == "a/filename.rs"));
     }
 
     #[test]
     fn parse_edit_invalid_suffix() {
         let cmd_line = "filename.rs\n".graphemes(true);
         let res = parse_edit_cmd(cmd_line, None).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
+    }
+
+    #[test]
+    fn parse_file_cmd_with_address() {
+        let cmd_line = " filename.rs".graphemes(true);
+        let res = parse_file_cmd(cmd_line, Some(Address(1, 1))).expect_err("unexpected addr");
+        assert!(matches!(res, Error::UnexpectedAddress));
+    }
+
+    #[test]
+    fn parse_file_cmd_no_filename() {
+        let cmd_line = "\n".graphemes(true);
+        let res = parse_file_cmd(cmd_line, None).expect("parsed file cmd");
+        assert!(matches!(res, Cmd::File(None)));
+    }
+
+    #[test]
+    fn parse_file_cmd_bad_filename() {
+        let cmd_line = " \r\n".graphemes(true);
+        let res = parse_file_cmd(cmd_line, None).expect_err("bad filename");
+        assert!(matches!(res, Error::InvalidFilename));
+    }
+
+    #[test]
+    fn parse_file_cmd_with_filename() {
+        let cmd_line = " a/filename.rs\r\n".graphemes(true);
+        let res = parse_file_cmd(cmd_line, None).expect("parsed file cmd");
+        assert!(
+            matches!(&res, Cmd::File(Some(f)) if f.to_str().unwrap() == "a/filename.rs"),
+            "{res:?} wasnt Cmd::File(Some('filename.rs'))"
+        );
+    }
+
+    #[test]
+    fn parse_file_cmd_invalid_suffix() {
+        let cmd_line = "filename.rs\n".graphemes(true);
+        let res = parse_file_cmd(cmd_line, None).expect_err("invalid suffix");
         assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 }
