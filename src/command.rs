@@ -221,12 +221,20 @@ where
     let mut right = None;
     let mut cmd_chr = None;
 
+    let mut next = cmd_line.next();
     loop {
-        match cmd_line.next() {
-            Some(s) if s.is_blank() => (),
-            Some(s) if s == "\r\n" || s == "\n" => break,
-            Some(".") => right = Some(buffer.current_line()),
-            Some("$") => right = Some(buffer.len()),
+        match next {
+            Some("\r\n" | "\n") => break,
+            Some(".") => {
+                right = Some(buffer.current_line());
+                next = cmd_line.next();
+            }
+            Some("$") => {
+                right = Some(buffer.len());
+                next = cmd_line.next();
+            }
+            Some(s) if s.is_blank() => next = cmd_line.next(),
+            Some(s) if s.is_ascii_digit() => (right, next) = parse_number(cmd_line, s)?,
             Some(s) => {
                 cmd_chr = s.chars().next();
                 break;
@@ -238,6 +246,16 @@ where
     let address = right.map(|r| Address(left.map_or(r, |l| l), r));
 
     Ok((address, cmd_chr))
+}
+
+fn parse_number<'a, 'b, I>(
+    cmd_line: &'a mut I,
+    first_digit: &'b str,
+) -> Result<(Option<usize>, Option<&'b str>), Error>
+where
+    I: Iterator<Item = &'b str>,
+{
+    Err(Error::InvalidLineNumber)
 }
 
 //impl Cmd {
@@ -625,6 +643,15 @@ mod tests {
             eval_address(&mut cmd_line, &mut buffer, &mut None).expect("should parse successfully");
         assert_eq!(address, Some(Address(3, 3)));
         assert_eq!(cmd, Some('d'));
+    }
+
+    #[test]
+    fn eval_simple_number_addr() {
+        let mut cmd_line = "42d\n".graphemes(true);
+        let (address, cmd) = eval_address(&mut cmd_line, &mut EditBuffer::new(), &mut None)
+            .expect("should eval line number");
+        assert_eq!(cmd, Some('d'));
+        assert_eq!(address, Some(Address(42, 42)));
     }
 
     #[test]
