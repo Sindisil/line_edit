@@ -736,12 +736,19 @@ mod tests {
 
     #[test]
     fn eval_offset_too_large() {
-        todo!();
+        let mut input = "999999999999999999999p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        assert!(matches!(res, Error::OffsetTooLarge));
+        let mut input = "+999999999999999999999p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        assert!(matches!(res, Error::OffsetTooLarge));
     }
 
     #[test]
     fn eval_offset_too_small() {
-        todo!();
+        let mut input = "-999999999999999999999p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        assert!(matches!(res, Error::OffsetTooSmall));
     }
 
     #[test]
