@@ -205,12 +205,19 @@ fn eval_address<'a, I>(
 where
     I: Iterator<Item = &'a str>,
 {
-    let left = None;
+    let mut left = None;
     let mut right = None;
 
     loop {
         match graphemes.peek() {
             Some(&"\r\n" | &"\n") => break,
+            Some(&",") => {
+                graphemes.next();
+                left = right.or(Some(1));
+                right = None;
+            }
+            Some(&";") => todo!(),
+            Some(&"+" | &"-") => todo!(),
             Some(&".") => {
                 graphemes.next();
                 let offset = eval_offsets(graphemes)?;
@@ -247,7 +254,10 @@ where
         }
     }
 
-    let address = right.map(|r| Address(left.map_or(r, |l| l), r));
+    let address = right.map_or_else(
+        || left.map(|l| Address(l, buffer.len())),
+        |r| Some(left.map_or_else(|| Address(r, r), |l| Address(l, r))),
+    );
 
     Ok(address)
 }
@@ -825,6 +835,51 @@ mod tests {
             .expect("should eval line number");
         assert_eq!(cmd_line.next(), Some("d"));
         assert_eq!(address, Some(Address(42, 42)));
+    }
+
+    #[test]
+    fn eval_simple_comma_addr() {
+        let mut input = "1,2p\n".graphemes(true).peekable();
+        let res =
+            eval_address(&mut input, &mut EditBuffer::new(), &mut None).expect("should succeed");
+        assert_eq!(res, Some(Address(1, 2)));
+        assert_eq!(input.next(), Some("p"));
+    }
+
+    #[test]
+    fn eval_leading_comma_addr() {
+        let mut input = ",4p\r\n".graphemes(true).peekable();
+        let res =
+            eval_address(&mut input, &mut EditBuffer::new(), &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(1, 4)));
+    }
+
+    #[test]
+    fn eval_trailing_comma_addr() {
+        let mut input = "5,p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(5, 6)));
+    }
+
+    #[test]
+    fn eval_comma_only_addr() {
+        let mut input = ",p\r\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(1, 6)));
+    }
+
+    #[test]
+    fn eval_comma_chain_addr() {
+        let mut input = ",12, 3+1,p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(4, 6)));
     }
 
     #[test]
