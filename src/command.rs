@@ -46,6 +46,7 @@ pub enum Error {
     Regex(regex::Error),
     NoMatchingLine,
     NoPreviousPattern,
+    NumberParse,
     TrailingBackslash,
     InvalidPatternDelimiter,
     InvalidCmdSuffix,
@@ -83,6 +84,7 @@ impl Display for Error {
             Error::InvalidFilename => write!(f, "invalid filename"),
             Error::ReadCommand(e) => write!(f, "{e} reading command input"),
             Error::MissingEol => write!(f, "missing line terminator"),
+            Error::NumberParse => write!(f, "invalid numeric string"),
         }
     }
 }
@@ -269,24 +271,24 @@ where
             "+" => {
                 graphemes.next();
                 total_offset = parse_number(graphemes)
+                    .map_err(|_| Error::OffsetTooLarge)
                     .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooLarge))
                     .and_then(|o| {
                         total_offset
                             .checked_add(cmp::max(1, o))
                             .ok_or(Error::OffsetOverflow)
-                    })
-                    .map_err(|_| Error::OffsetTooLarge)?;
+                    })?;
             }
             "-" => {
                 graphemes.next();
                 total_offset = parse_number(graphemes)
+                    .map_err(|_| Error::OffsetTooSmall)
                     .and_then(|o| o.try_into().map_err(|_| Error::OffsetTooSmall))
                     .and_then(|o| {
                         total_offset
                             .checked_sub(cmp::max(1, o))
                             .ok_or(Error::OffsetOverflow)
-                    })
-                    .map_err(|_| Error::OffsetTooSmall)?;
+                    })?;
             }
 
             _ => break,
@@ -321,7 +323,7 @@ where
                 .and_then(|c| c.to_digit(10))
                 .and_then(|d| acc.checked_mul(10).and_then(|n| n.checked_add(d as usize)))
         })
-        .ok_or(Error::InvalidLineNumber)
+        .ok_or(Error::NumberParse)
     //    let mut acc = first_digit
     //        .chars()
     //        .next()
@@ -731,7 +733,25 @@ mod tests {
 
     #[test]
     fn eval_mixed_offsets() {
-        todo!();
+        let mut input = "2-7+6p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect("should parse");
+        assert_eq!(res, 1);
+        assert!(matches!(input.next(), Some("p")));
+    }
+
+    #[test]
+    fn eval_offset_overflow() {
+        let mut input = "8399999999999999999+839999999999999999+8399999999999999999p"
+            .graphemes(true)
+            .peekable();
+        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        assert!(matches!(res, Error::OffsetOverflow));
+
+        let mut input = "-839999999999999999-83999999999999999-8399999999999999999p"
+            .graphemes(true)
+            .peekable();
+        let res = eval_offsets(&mut input).expect_err("shouldn't parse");
+        assert!(matches!(res, Error::OffsetOverflow));
     }
 
     #[test]
@@ -752,13 +772,11 @@ mod tests {
     }
 
     #[test]
-    fn eval_offset_overflow() {
-        todo!();
-    }
-
-    #[test]
     fn eval_mixed_offsets_with_spaces() {
-        todo!();
+        let mut input = "   2 -7  6 +1p".graphemes(true).peekable();
+        let res = eval_offsets(&mut input).expect("should parse");
+        assert_eq!(res, 2);
+        assert!(matches!(input.next(), Some("p")));
     }
 
     #[test]
