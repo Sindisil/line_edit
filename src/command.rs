@@ -221,7 +221,15 @@ where
                 });
                 right = right.or_else(|| Some(buffer.len()));
             }
-            Some(&"+" | &"-") => todo!(),
+            Some(&"+" | &"-") => {
+                let offset = eval_offsets(graphemes)?;
+                right = Some(
+                    buffer
+                        .current_line()
+                        .checked_add_signed(offset)
+                        .ok_or(Error::OffsetOverflow)?,
+                );
+            }
             Some(&".") => {
                 graphemes.next();
                 let offset = eval_offsets(graphemes)?;
@@ -252,12 +260,12 @@ where
                     num.checked_add_signed(offset)
                         .ok_or(Error::OffsetOverflow)?,
                 );
-                if left.is_none() {
-                    left = right;
-                }
             }
             Some(_) => break,
             None => return Err(Error::MissingEol),
+        }
+        if left.is_none() && right.is_some() {
+            left = right;
         }
     }
 
@@ -964,6 +972,46 @@ mod tests {
         buffer.set_current_line(3);
         let res = eval_address(&mut input, &mut buffer, &mut None).expect_err("invalid address");
         assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn eval_simple_offset_only_addrs() {
+        let mut input = "+p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(4, 4)));
+
+        let mut input = "+10p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(13, 13)));
+
+        let mut input = "-p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(2, 2)));
+
+        let mut input = "-2p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect("should eval ok");
+        assert_eq!(input.next(), Some("p"));
+        assert_eq!(res, Some(Address(1, 1)));
+    }
+
+    #[test]
+    fn eval_too_big_offset_only_addr_overflows() {
+        let mut input = "-10p\n".graphemes(true).peekable();
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.set_current_line(3);
+        let res = eval_address(&mut input, &mut buffer, &mut None).expect_err("offset overflow");
+        assert!(matches!(res, Error::OffsetOverflow));
     }
 
     #[test]
