@@ -127,7 +127,7 @@ mod tests {
     fn filename_option() {
         let args = &["test", r"src\cli.rs"];
         let mut output = Vec::new();
-        let res = parse_args(&mut output, args).expect("parsed filenames");
+        let res = parse_args(&mut output, args).unwrap();
         assert!(matches!(res.file, Some(p) if p == Path::new(r"src\cli.rs")));
     }
 

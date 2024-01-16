@@ -58,7 +58,7 @@ mod tests {
             .peeking_take_while(char::is_ascii_digit)
             .collect::<String>();
         assert_eq!("12345", numbers);
-        assert_eq!('a', *piter.peek().expect("peeked character"));
+        assert_eq!('a', *piter.peek().unwrap());
         let letters = piter.collect::<String>();
         assert_eq!("abcde", letters);
     }
