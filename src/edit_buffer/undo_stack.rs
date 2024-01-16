@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 /// `UndoStack` ecapsulates the undo and redo stacks, with methods that
 /// maintain the correct invarients.
 ///
@@ -10,6 +8,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// redo stack onto the undo stack (both verbatum and inversed) in
 /// order to allow "undoing the undos" (i.e., not losing any edit
 /// history).
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use std::ops::{Deref, DerefMut};
 
 use crate::edit_buffer::operation::Op;
@@ -54,7 +54,7 @@ impl UndoStack {
     ///
     /// This will preserve full history, including the undo
     /// commands issued before the current change.
-    pub fn push_undo<T: Into<Undoable>>(&mut self, item: T) {
+    pub fn push_undo(&mut self, item: impl Into<Undoable>) {
         let mut item = item.into();
         if item.id.is_none() {
             item.id = Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst));
@@ -119,6 +119,14 @@ impl UndoStack {
 }
 
 impl Redoable {
+    /// Returns an Undoable that is the inverse of the
+    /// Redoable upon which this method is called.
+    ///
+    /// This is to support flushing the redo stack onto the
+    /// undo stack when a new change is made, allowing
+    /// previous undo actions to be undone and thus
+    /// ensuring that there are no unreachable past
+    /// states.
     fn to_inverse_undoable(&self) -> Undoable {
         Undoable {
             id: Some(INST_COUNTER.fetch_add(1, Ordering::SeqCst)),

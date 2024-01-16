@@ -38,12 +38,10 @@ pub struct CmdArgs {
     pub file: Option<PathBuf>,
 }
 
-pub(crate) fn parse_args<W, I>(mut output: W, args: I) -> Result<CmdArgs, Error>
-where
-    W: Write,
-    I: IntoIterator,
-    I::Item: Into<OsString>,
-{
+pub fn parse_args(
+    mut output: impl Write,
+    args: impl IntoIterator<Item = impl Into<OsString>>,
+) -> Result<CmdArgs, Error> {
     let mut cmd_args = CmdArgs { file: None };
 
     let mut parser = lexopt::Parser::from_iter(args);
@@ -129,7 +127,7 @@ mod tests {
     fn filename_option() {
         let args = &["test", r"src\cli.rs"];
         let mut output = Vec::new();
-        let res = parse_args(&mut output, args).expect("parsed filenames");
+        let res = parse_args(&mut output, args).unwrap();
         assert!(matches!(res.file, Some(p) if p == Path::new(r"src\cli.rs")));
     }
 
