@@ -100,8 +100,10 @@ impl Index<usize> for EditBuffer {
     type Output = String;
 
     #[inline]
-    fn index(&self, index: usize) -> &String {
-        self.get(index).expect("Out of bounds access")
+    fn index(&self, index: usize) -> &Self::Output {
+assert!(index != 0, "index out of bounds: 0 is an invalid index");
+
+        &self.text[index - 1]
     }
 }
 
@@ -109,7 +111,7 @@ impl Index<Range<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: Range<usize>) -> &[String] {
+    fn index(&self, index: Range<usize>) -> &Self::Output {
         assert!(index.start > 0 && index.end > 0, "Invalid range");
         &self.text[index.start - 1..index.end - 1]
     }
@@ -119,7 +121,7 @@ impl Index<RangeInclusive<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: RangeInclusive<usize>) -> &[String] {
+    fn index(&self, index: RangeInclusive<usize>) -> &Self::Output {
         assert!(*index.start() > 0 && *index.end() > 0, "Invalid range");
         &self.text[(*index.start() - 1)..(*index.end())]
     }
@@ -129,7 +131,7 @@ impl Index<RangeFrom<usize>> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: RangeFrom<usize>) -> &[String] {
+    fn index(&self, index: RangeFrom<usize>) -> &Self::Output {
         assert!(index.start > 0, "Invalid range");
         &self.text[index.start - 1..]
     }
@@ -139,7 +141,7 @@ impl Index<RangeFull> for EditBuffer {
     type Output = [String];
 
     #[inline]
-    fn index(&self, index: RangeFull) -> &[String] {
+    fn index(&self, index: RangeFull) -> &Self::Output {
         &self.text[index]
     }
 }
@@ -217,13 +219,6 @@ impl EditBuffer {
         self.filename.as_deref()
     }
 
-    pub fn get(&self, index: usize) -> Option<&String> {
-        match index {
-            0 => None,
-            _ => self.text.get(index - 1),
-        }
-    }
-
     /// Reads lines from reader into the buffer at the specified line.
     ///
     /// Default EOL auto-detect:
@@ -247,9 +242,7 @@ impl EditBuffer {
         let mut line = String::new();
         let mut bytes_read = 0;
         loop {
-            let len = reader.read_line(&mut line).map_err(|e| {
-                Error::Read(e)
-            })?;
+            let len = reader.read_line(&mut line).map_err(Error::Read)?;
             if len == 0 {
                 break;
             }
@@ -1046,14 +1039,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "Out of bounds access"]
+    #[should_panic = "index out of bounds"]
     fn zero_index_panics() {
         let buffer = EditBuffer::from(vec!["1"]);
         let _ = &buffer[0];
     }
 
     #[test]
-    #[should_panic = "Out of bounds access"]
+    #[should_panic = "index out of bounds"]
     fn index_too_large_panics() {
         let buffer = EditBuffer::from(vec!["1", "2", "3"]);
         let _ = &buffer[4];
