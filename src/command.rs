@@ -19,6 +19,7 @@ pub enum Cmd {
     Enumerate(Option<Address>),
     File(Option<PathBuf>),
     Global(Option<Address>, Regex, String),
+    Insert(Option<Address>),
     Null(Option<Address>),
     Print(Option<Address>),
     Quit,
@@ -108,6 +109,7 @@ impl Cmd {
             Some("e") => parse_edit_cmd(&mut graphemes, address),
             Some("f") => parse_file_cmd(&mut graphemes, address),
             Some("g") => parse_global_cmd(&mut graphemes, address, previous_pattern, input),
+            Some("i") => parse_no_args(&mut graphemes, Cmd::Insert(address)),
             Some("n") => parse_no_args(&mut graphemes, Cmd::Enumerate(address)),
             None | Some("\n" | "\r\n") => Ok(Cmd::Null(address)),
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
@@ -956,6 +958,13 @@ mod tests {
             matches!(res, Cmd::Enumerate(None)),
             "{res:?} didn't match Cmd::Enumerate(None)"
         );
+    }
+
+    #[test]
+    fn parse_insert_cmd_no_addr() {
+        let mut input = "i\r\n".as_bytes();
+        let res = Cmd::read(&mut input, &mut EditBuffer::new(), &mut None).unwrap();
+        assert!(matches!(res, Cmd::Insert(None)));
     }
 
     #[test]

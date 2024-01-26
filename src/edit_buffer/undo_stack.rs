@@ -179,7 +179,7 @@ impl Deref for Redoable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::edit_buffer::{AppendData, DeleteData};
+    use crate::edit_buffer::{DeleteData, Insertion};
 
     #[test]
     fn create_new_undo_stack() {
@@ -197,13 +197,13 @@ mod tests {
     #[test]
     fn undo_stack_non_empty_fingerprint() {
         let mut s = UndoStack::new();
-        s.push_undo(Op::Append(AppendData {
-            ..AppendData::default()
+        s.push_undo(Op::Append(Insertion {
+            ..Insertion::default()
         }));
         let fp1 = s.fingerprint();
         assert!(fp1.is_some());
-        s.push_undo(Op::Append(AppendData {
-            ..AppendData::default()
+        s.push_undo(Op::Append(Insertion {
+            ..Insertion::default()
         }));
         let fp2 = s.fingerprint();
         assert!(fp2.is_some() && fp1 != fp2);
@@ -220,7 +220,7 @@ mod tests {
         use crate::command::Address;
 
         let mut s = UndoStack::new();
-        let o_app = Op::Append(AppendData {
+        let o_app = Op::Append(Insertion {
             address: Some(Address(1, 1)),
             lines: vec!["spam".to_owned()],
             current_line: 0,
