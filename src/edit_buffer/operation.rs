@@ -4,16 +4,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub enum Op {
     Inverse(Box<Op>),
-    Append(AppendData),
+    Append(Insertion),
     Delete(DeleteData),
     Edit(EditData),
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AppendData {
-    pub address: Option<Address>,
-    pub current_line: usize,
-    pub lines: Vec<String>,
+    Insert(Insertion),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -31,6 +25,13 @@ pub struct EditData {
     pub clean_fingerprint: Option<u64>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct Insertion {
+    pub address: Option<Address>,
+    pub current_line: usize,
+    pub lines: Vec<String>,
+}
+
 impl Op {
     pub fn inverse(&self) -> Op {
         match self {
@@ -46,7 +47,7 @@ mod tests {
 
     #[test]
     fn inverse_op() {
-        let op = Op::Append(AppendData {
+        let op = Op::Append(Insertion {
             address: None,
             current_line: 1,
             lines: Vec::new(),
@@ -60,7 +61,7 @@ mod tests {
 
     #[test]
     fn inverse_inverse_op() {
-        let op = Op::Append(AppendData {
+        let op = Op::Append(Insertion {
             address: None,
             current_line: 1,
             lines: Vec::new(),

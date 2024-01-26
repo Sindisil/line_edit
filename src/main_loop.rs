@@ -22,7 +22,7 @@ impl fmt::Display for Error {
         match self {
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
-            Error::BufferCmd(e) => write!(f, "buffer command error: {e}"),
+            Error::BufferCmd(e) => write!(f, "{e}"),
         }
     }
 }
@@ -71,6 +71,7 @@ pub fn run(
                         commands,
                         &mut previous_pattern,
                     ),
+                    Cmd::Insert(address) => buffer.do_insert(&mut input, &mut output, *address),
                     Cmd::Null(address) => buffer.do_null(&mut output, *address),
                     Cmd::Print(address) => buffer.do_print(&mut output, *address),
                     Cmd::Quit => do_quit(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
@@ -201,10 +202,7 @@ mod tests {
         let mut output = Vec::new();
 
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(
-            &output[..],
-            &b":buffer command error: invalid address\n:"[..],
-        );
+        assert_eq!(&output[..], &b":invalid address\n:"[..],);
     }
 
     #[test]
@@ -283,6 +281,17 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("test/assets/text_with_final_eol.txt"));
         assert!(output.contains("new_file_name.txt"));
+    }
+
+    #[test]
+    fn insert_cmd_dispatch() {
+        let input = b"i\none\ntwo\nthree\n.\n2p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("two\n"));
+        assert!(output.contains("Unwritten changes"));
+        assert!(!output.contains("one"));
     }
 
     #[test]
