@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::fs::OpenOptions;
 use std::io::{self, prelude::*};
+use std::path::Path;
 
 use regex::Regex;
 
@@ -18,6 +20,9 @@ pub enum Error {
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
     ReadGlobalCmd,
+    NoFilename,
+    FileOpen(io::Error),
+    WriteLines(io::Error),
 }
 
 impl std::error::Error for Error {}
@@ -32,6 +37,9 @@ impl fmt::Display for Error {
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
             Error::ReadGlobalCmd => write!(f, "error reading global command"),
+            Error::NoFilename => write!(f, "no filename"),
+            Error::FileOpen(_) => write!(f, "error opening file"),
+            Error::WriteLines(_) => write!(f, "error writing lines"),
         }
     }
 }
@@ -93,9 +101,9 @@ pub fn run(
                     Cmd::Quit => do_quit(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
                         done = ok_to_exit;
                     }),
-                    Cmd::Write(address, filename) => buffer
-                        .do_write(&mut output, *address, filename.as_deref())
-                        .map_err(Error::BufferCmd),
+                    Cmd::Write(address, filename) => {
+                        write_file(&mut buffer, &mut output, *address, filename.as_deref())
+                    }
                     Cmd::Undo => {
                         buffer.do_undo();
                         Ok(())
@@ -260,6 +268,65 @@ fn do_quit(
             Ok(false)
         }
     }
+}
+
+fn write_file(
+    buffer: &mut EditBuffer,
+    output: &mut impl Write,
+    address: Option<Address>,
+    filename: Option<&Path>,
+) -> Result<(), Error> {
+    if buffer.filename().is_none() {
+        if filename.is_none() {
+            return Err(Error::NoFilename);
+        }
+        buffer.set_filename(filename.map(ToOwned::to_owned));
+    }
+
+    let mut destination = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(buffer.filename().as_ref().unwrap())
+        .map_err(Error::FileOpen)?;
+
+    let (bytes_written, lines_written) = write_lines(&mut destination, buffer, address)?;
+    writeln!(
+        output,
+        "{bytes_written} bytes written ({lines_written} lines)"
+    )
+    .map_err(Error::WriteOutput)?;
+    Ok(())
+}
+fn write_lines(
+    destination: &mut impl Write,
+    buffer: &mut EditBuffer,
+    address: Option<Address>,
+) -> Result<(usize, usize), Error> {
+    let line_span = address.map_or_else(|| 1usize..=buffer.len(), |addr| addr.0..=addr.1);
+    let full_buffer_write = line_span == (1usize..=buffer.len());
+
+    let mut total_bytes_written = 0;
+    let mut lines_written = 0;
+
+    if !line_span.is_empty() {
+        for line in &buffer[line_span] {
+            let bytes_to_write = line.len();
+            let mut bytes_written = 0;
+            while bytes_written < bytes_to_write {
+                bytes_written = bytes_written
+                    + destination
+                        .write(line[bytes_written..].as_bytes())
+                        .map_err(Error::WriteLines)?;
+            }
+            total_bytes_written += bytes_written;
+            lines_written += 1;
+        }
+    }
+
+    if full_buffer_write {
+        buffer.reset_clean_fingerprint();
+    }
+    Ok((total_bytes_written, lines_written))
 }
 
 fn write_prompt(output: &mut impl Write) -> Result<(), Error> {
@@ -784,7 +851,7 @@ mod tests {
         let mut output = Vec::new();
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
-        assert!(output.contains("No filename"));
+        assert!(output.contains("no filename"));
     }
 
     #[test]
@@ -805,5 +872,93 @@ mod tests {
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("invalid address"));
         assert!(output.contains("Unwritten changes"));
+    }
+
+    #[test]
+    fn write_propegates_errors() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
+        let mut dummy_file = BadWriter {};
+        let res =
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2))).expect_err("io error");
+        assert!(matches!(res, Error::WriteLines(_)));
+    }
+
+    #[test]
+    fn write_one_line() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let mut dummy_file = Vec::new();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(2, 2))).unwrap();
+        assert_eq!(bytes, 2);
+        assert_eq!(lines, 1);
+    }
+
+    #[test]
+    fn write_many_lines() {
+        let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
+        let mut dummy_file = Vec::new();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 6))).unwrap();
+        assert_eq!(bytes, 18);
+        assert_eq!(lines, 6);
+    }
+
+    #[test]
+    fn write_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let mut dummy_file = Vec::new();
+        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, None).unwrap();
+        assert_eq!(bytes, 0);
+        assert_eq!(lines, 0);
+    }
+
+    #[test]
+    fn write_no_addr_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        let mut input = "one more line\n.\n".as_bytes();
+        buffer
+            .prepare_append(&mut input, Some(Address(0, 0)))
+            .unwrap();
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, None).unwrap();
+        assert_eq!(bytes, 20);
+        assert_eq!(lines, 4);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_full_buffer_leaves_clean_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        let mut input = "one more line\n.\n".as_bytes();
+        buffer
+            .prepare_append(&mut input, Some(Address(0, 0)))
+            .unwrap();
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let address = Some(Address(1, buffer.len()));
+        let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, address).unwrap();
+        assert_eq!(bytes, 20);
+        assert_eq!(lines, 4);
+        assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn write_partial_buffer_leaves_dirty_buffer() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert!(!buffer.is_dirty());
+        let mut input = "one more line\n.\n".as_bytes();
+        buffer
+            .prepare_append(&mut input, Some(Address(0, 0)))
+            .unwrap();
+        assert!(buffer.is_dirty());
+        let mut dummy_file = Vec::new();
+        let (bytes, lines) =
+            write_lines(&mut dummy_file, &mut buffer, Some(Address(1, 2))).unwrap();
+        assert_eq!(bytes, 16);
+        assert_eq!(lines, 2);
+        assert!(buffer.is_dirty());
     }
 }

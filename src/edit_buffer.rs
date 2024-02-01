@@ -7,7 +7,7 @@ mod undo_stack;
 use std::borrow::ToOwned;
 use std::cmp::Ordering;
 use std::fmt::{self, Display, Formatter};
-use std::fs::OpenOptions;
+//use std::fs::OpenOptions;
 use std::io::{self, BufRead, Write};
 use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
@@ -29,9 +29,6 @@ pub struct EditBuffer {
 pub enum Error {
     InvalidAddress,
     WriteOutput(io::Error),
-    NoFilename,
-    FileOpen(io::Error),
-    WriteLines(io::Error),
     ReadLines(io::Error),
 }
 
@@ -42,9 +39,6 @@ impl Display for Error {
         match self {
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::WriteOutput(e) => write!(f, "Error writing output: {e}"),
-            Error::NoFilename => write!(f, "No filename"),
-            Error::FileOpen(e) => write!(f, "Error opening file: {e}"),
-            Error::WriteLines(e) => write!(f, "Error writing lines to file: {e}"),
             Error::ReadLines(e) => write!(f, "{e} reading input lines"),
         }
     }
@@ -195,183 +189,18 @@ impl EditBuffer {
         self.filename.as_deref()
     }
 
-    // fixme - move out into io module or main_loop
-    fn write(
-        &mut self,
-        output: &mut impl Write,
-        address: Option<Address>,
-        destination: &mut impl Write,
-    ) -> Result<(), Error> {
-        let line_span = address.map_or_else(|| 1usize..=self.len(), |addr| addr.0..=addr.1);
-        let full_buffer_write = line_span == (1usize..=self.len());
-
-        let mut total_bytes_written = 0;
-
-        if !line_span.is_empty() {
-            for line in &self[line_span] {
-                let bytes_to_write = line.len();
-                let mut bytes_written = 0;
-                while bytes_written < bytes_to_write {
-                    bytes_written = bytes_written
-                        + destination
-                            .write(line[bytes_written..].as_bytes())
-                            .map_err(Error::WriteLines)?;
-                }
-                total_bytes_written += bytes_written;
-            }
-        }
-
-        writeln!(output, "{total_bytes_written}").map_err(Error::WriteOutput)?;
-        if full_buffer_write {
-            self.clean_fingerprint = self.undo_stack.fingerprint();
-        }
-        Ok(())
+    pub fn set_filename(&mut self, filename: Option<PathBuf>) {
+        self.filename = filename;
     }
 
-    //    fn execute(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
-    //        match op {
-    //            Op::Append(data) => {
-    //                let b = data.address.map_or(self.current_line, |addr| addr.1);
-    //
-    //                if data.lines.is_empty() {
-    //                    self.current_line = b;
-    //                } else {
-    //                    // set default_eol if neccessary
-    //                    let default_eol = self
-    //                        .default_eol
-    //                        .get_or_insert_with(|| compute_default_eol(&data.lines));
-    //                    self.text.splice(
-    //                        b..b,
-    //                        data.lines.iter().cloned().map(|mut line| {
-    //                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
-    //                                line.push_str(default_eol);
-    //                            }
-    //                            line
-    //                        }),
-    //                    );
-    //                    self.current_line = b + data.lines.len();
-    //                }
-    //                Ok(())
-    //            }
-    //            Op::Delete(data) => {
-    //                let (b, e) = data
-    //                    .address
-    //                    .map_or((self.current_line, self.current_line), |addr| {
-    //                        (addr.0, addr.1)
-    //                    });
-    //
-    //                if data.lines_removed.is_empty() {
-    //                    data.lines_removed
-    //                        .splice(.., self.text.splice(b - 1..e, None));
-    //                } else {
-    //                    self.text.splice(b - 1..e, None);
-    //                }
-    //                self.current_line = usize::min(self.text.len(), b);
-    //                Ok(())
-    //            }
-    //            Op::Edit(data) => {
-    //                let f = File::open(&data.filename);
-    //                let source = match f {
-    //                    Ok(f) => Ok(Some(BufReader::new(f))),
-    //                    Err(e) => match e.kind() {
-    //                        io::ErrorKind::NotFound => {
-    //                            writeln!(output, "{e}").map_err(Error::WriteOutput)?;
-    //                            Ok(None)
-    //                        }
-    //                        _ => Err(e),
-    //                    },
-    //                }
-    //                .map_err(Error::FileOpen)?;
-    //
-    //                self.read_replace(output, source, Some(data))
-    //            }
-    //            Op::Insert(data) => {
-    //                let b = data.address.map_or(self.current_line, |addr| addr.1);
-    //
-    //                if data.lines.is_empty() {
-    //                    self.current_line = b;
-    //                } else {
-    //                    let b = b.saturating_sub(1); // insert point is before addressed line
-    //                                                 // set default_eol if neccessary
-    //                    let default_eol = self
-    //                        .default_eol
-    //                        .get_or_insert_with(|| compute_default_eol(&data.lines));
-    //                    self.text.splice(
-    //                        b..b,
-    //                        data.lines.iter().cloned().map(|mut line| {
-    //                            if !(line.ends_with('\n') || line.ends_with("\r\n")) {
-    //                                line.push_str(default_eol);
-    //                            }
-    //                            line
-    //                        }),
-    //                    );
-    //                    self.current_line = b + data.lines.len();
-    //                }
-    //                Ok(())
-    //            }
-    //            Op::Inverse(inner) => self.revert(output, inner),
-    //        }
-    //    }
-    //
-    //    fn revert(&mut self, output: &mut impl Write, op: &mut Op) -> Result<(), Error> {
-    //        match op {
-    //            Op::Append(data) => {
-    //                let b = data.address.map_or(data.current_line, |addr| addr.1);
-    //                self.text.splice(b..b + data.lines.len(), None);
-    //                self.current_line = data.current_line;
-    //                Ok(())
-    //            }
-    //            Op::Delete(data) => {
-    //                let b = data.address.map_or(data.current_line, |addr| addr.0) - 1;
-    //                self.text.splice(b..b, data.lines_removed.iter().cloned());
-    //                self.current_line = b + data.lines_removed.len();
-    //                Ok(())
-    //            }
-    //            Op::Edit(data) => {
-    //                self.text.splice(.., data.lines_removed.iter().cloned());
-    //                self.current_line = data.current_line;
-    //                Ok(())
-    //            }
-    //            Op::Insert(data) => {
-    //                let b = data
-    //                    .address
-    //                    .map_or(data.current_line, |addr| addr.1)
-    //                    .saturating_sub(1);
-    //                self.text.splice(b..b + data.lines.len(), None);
-    //                self.current_line = data.current_line;
-    //                Ok(())
-    //            }
-    //            Op::Inverse(inner) => self.execute(output, inner),
-    //        }
-    //    }
-    //
-    //    pub fn read_replace(
-    //        &mut self,
-    //        output: &mut impl Write,
-    //        source: Option<impl BufRead>,
-    //        data: Option<&mut EditData>,
-    //    ) -> Result<(), Error> {
-    //        if let Some(data) = data {
-    //            if data.lines_removed.is_empty() {
-    //                data.lines_removed.append(&mut self.text);
-    //            }
-    //        }
-    //        self.text.clear();
-    //
-    //        if let Some(source) = source {
-    //            let ret = self.read(0, source)?;
-    //            match ret {
-    //                ReadResult::EOLAdded(bytes_read) => {
-    //                    writeln!(output, "missing line terminator appended\n{bytes_read}")
-    //                        .map_err(Error::WriteOutput)?;
-    //                }
-    //                ReadResult::AsIs(bytes_read) => {
-    //                    writeln!(output, "{bytes_read}").map_err(Error::WriteOutput)?;
-    //                }
-    //            }
-    //        }
-    //        Ok(())
-    //    }
+    pub fn clean_fingerprint(&self) -> Option<u64> {
+        self.clean_fingerprint
+    }
+
+    pub fn reset_clean_fingerprint(&mut self) -> Option<u64> {
+        self.clean_fingerprint = self.undo_stack.fingerprint();
+        self.clean_fingerprint
+    }
 
     pub fn prepare_append(
         &mut self,
@@ -503,29 +332,6 @@ impl EditBuffer {
             self.undo_stack.push_undo(redo);
         }
     }
-
-    pub fn do_write(
-        &mut self,
-        output: &mut impl Write,
-        address: Option<Address>,
-        filename: Option<&Path>,
-    ) -> Result<(), Error> {
-        if self.filename.is_none() {
-            if filename.is_none() {
-                return Err(Error::NoFilename);
-            }
-            self.filename = filename.map(ToOwned::to_owned);
-        }
-
-        let mut dest = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(self.filename.as_ref().unwrap())
-            .map_err(Error::FileOpen)?;
-
-        self.write(output, address, &mut dest)?;
-        Ok(())
-    }
 }
 
 fn compute_native_eol() -> &'static str {
@@ -583,102 +389,6 @@ mod tests {
             Err(io::Error::from(io::ErrorKind::Other))
         }
     }
-
-    // write() tests
-    #[test]
-    fn write_propegates_errors() {
-        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        let mut dummy_file = BadWriter {};
-        let mut output = Vec::new();
-        let res = buf
-            .write(&mut output, Some(Address(1, 2)), &mut dummy_file)
-            .expect_err("io error");
-        assert!(matches!(res, Error::WriteLines(_)));
-    }
-
-    #[test]
-    fn write_one_line() {
-        let mut buf = EditBuffer::from(vec!["1\n", "2", "3"]);
-        let mut dummy_file = Vec::new();
-        let mut output = Vec::new();
-        buf.write(&mut output, Some(Address(2, 2)), &mut dummy_file)
-            .unwrap();
-        assert_eq!(b"2\n", &output[..]);
-    }
-
-    #[test]
-    fn write_many_lines() {
-        let mut buf = EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
-        let mut dummy_file = Vec::new();
-        let mut output = Vec::new();
-        buf.write(&mut output, Some(Address(1, 6)), &mut dummy_file)
-            .unwrap();
-        assert_eq!(b"18\n", &output[..]);
-    }
-
-    #[test]
-    fn write_empty_buffer() {
-        let mut buf = EditBuffer::new();
-        let mut dummy_file = Vec::new();
-        let mut output = Vec::new();
-        buf.write(&mut output, None, &mut dummy_file).unwrap();
-        assert_eq!(b"0\n", &output[..]);
-    }
-
-    //    #[test]
-    //    fn write_no_addr_leaves_clean_buffer() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        assert!(!buffer.is_dirty());
-    //        let mut output = Vec::new();
-    //        let mut input = "one more line\n.\n".as_bytes();
-    //        buffer
-    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-    //            .unwrap();
-    //        assert!(buffer.is_dirty());
-    //        let mut dummy_file = Vec::new();
-    //        output.clear();
-    //        buffer.write(&mut output, None, &mut dummy_file).unwrap();
-    //        assert_eq!(b"20\n", &output[..]);
-    //        assert!(!buffer.is_dirty());
-    //    }
-    //
-    //    #[test]
-    //    fn write_full_buffer_leaves_clean_buffer() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        assert!(!buffer.is_dirty());
-    //        let mut output = Vec::new();
-    //        let mut input = "one more line\n.\n".as_bytes();
-    //        buffer
-    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-    //            .unwrap();
-    //        assert!(buffer.is_dirty());
-    //        let mut dummy_file = Vec::new();
-    //        output.clear();
-    //        buffer
-    //            .write(&mut output, Some(Address(1, buffer.len())), &mut dummy_file)
-    //            .unwrap();
-    //        assert_eq!(b"20\n", &output[..]);
-    //        assert!(!buffer.is_dirty());
-    //    }
-    //
-    //    #[test]
-    //    fn write_partial_buffer_leaves_dirty_buffer() {
-    //        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
-    //        assert!(!buffer.is_dirty());
-    //        let mut output = Vec::new();
-    //        let mut input = "one more line\n.\n".as_bytes();
-    //        buffer
-    //            .do_append(&mut input, &mut output, Some(Address(0, 0)))
-    //            .unwrap();
-    //        assert!(buffer.is_dirty());
-    //        let mut dummy_file = Vec::new();
-    //        output.clear();
-    //        buffer
-    //            .write(&mut output, Some(Address(1, 2)), &mut dummy_file)
-    //            .unwrap();
-    //        assert_eq!(b"16\n", &output[..]);
-    //        assert!(buffer.is_dirty());
-    //    }
 
     /////
     // EditBuffer creation tests
