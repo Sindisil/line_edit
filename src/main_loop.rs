@@ -8,14 +8,13 @@ use regex::Regex;
 
 use crate::cli;
 use crate::command::{self, Address, Cmd};
-use crate::edit_buffer::{self, EditBuffer};
+use crate::edit_buffer::EditBuffer;
 use crate::num_utils::NumUtils;
 
 #[derive(Debug)]
 pub enum Error {
     WriteOutput(io::Error),
     ParseCmd(command::Error),
-    BufferCmd(edit_buffer::Error),
     InvalidAddress,
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
@@ -23,6 +22,7 @@ pub enum Error {
     NoFilename,
     FileOpen(io::Error),
     WriteLines(io::Error),
+    ReadLines(io::Error),
 }
 
 impl std::error::Error for Error {}
@@ -32,7 +32,6 @@ impl fmt::Display for Error {
         match self {
             Error::WriteOutput(e) => write!(f, "error writing output: {e}"),
             Error::ParseCmd(e) => write!(f, "Bad command: {e}"),
-            Error::BufferCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
@@ -40,6 +39,7 @@ impl fmt::Display for Error {
             Error::NoFilename => write!(f, "no filename"),
             Error::FileOpen(_) => write!(f, "error opening file"),
             Error::WriteLines(_) => write!(f, "error writing lines"),
+            Error::ReadLines(e) => write!(f, "{e} reading input lines"),
         }
     }
 }
@@ -72,12 +72,9 @@ pub fn run(
             .and_then(|cmd| {
                 let res = match &cmd {
                     // dispatch editor commands
-                    Cmd::Append(address) => buffer
-                        .prepare_append(&mut input, *address)
-                        .map_err(Error::BufferCmd),
-                    Cmd::Delete(address) => {
-                        buffer.prepare_delete(*address).map_err(Error::BufferCmd)
-                    }
+                    Cmd::Append(address) => append_cmd(&mut buffer, &mut input, *address),
+                    Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
+
                     Cmd::Edit(_file) => {
                         todo!()
                     }
@@ -91,9 +88,7 @@ pub fn run(
                         commands,
                         &mut previous_pattern,
                     ),
-                    Cmd::Insert(address) => buffer
-                        .prepare_insert(&mut input, *address)
-                        .map_err(Error::BufferCmd),
+                    Cmd::Insert(address) => insert_cmd(&mut buffer, &mut input, *address),
                     Cmd::Null(address) => do_null(&mut buffer, &mut output, *address),
                     Cmd::Print(address) => do_print(&mut buffer, &mut output, *address),
                     Cmd::Quit => do_quit(&mut output, &buffer, &prev_command).map(|ok_to_exit| {
@@ -117,6 +112,32 @@ pub fn run(
             .or_else(|e| writeln!(output, "{e}").map_err(Error::WriteOutput))?;
     }
     Ok(())
+}
+
+pub fn append_cmd(
+    buffer: &mut EditBuffer,
+    input: &mut impl BufRead,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    if address.is_some_and(|a| a.1 > buffer.len()) {
+        return Err(Error::InvalidAddress);
+    }
+    let mut lines = Vec::new();
+    Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
+    //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
+    buffer.do_append(address, lines);
+    Ok(())
+}
+
+fn delete_cmd(buffer: &mut EditBuffer, address: Option<Address>) -> Result<(), Error> {
+    match address {
+        Some(Address(0, _)) => Err(Error::InvalidAddress),
+        None if buffer.current_line() == 0 => Err(Error::InvalidAddress),
+        _ => {
+            buffer.do_delete(address);
+            Ok(())
+        }
+    }
 }
 
 pub fn do_enumerate(
@@ -204,6 +225,20 @@ pub fn do_global(
         }
     }
 
+    Ok(())
+}
+
+pub fn insert_cmd(
+    buffer: &mut EditBuffer,
+    input: &mut impl BufRead,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    if address.is_some_and(|a| a.1 > buffer.len()) {
+        return Err(Error::InvalidAddress);
+    }
+    let mut lines = Vec::new();
+    Cmd::read_lines(input, &mut lines).map_err(Error::ReadLines)?;
+    buffer.do_insert(address, lines);
     Ok(())
 }
 
@@ -482,10 +517,8 @@ mod tests {
         }
         input.extend_from_slice(".\n".as_bytes());
         let mut input = &input[..];
-
-        buffer
-            .prepare_append(&mut input, Some(Address(buffer.len(), buffer.len())))
-            .unwrap();
+        let address = Some(Address(buffer.len(), buffer.len()));
+        append_cmd(&mut buffer, &mut input, address).unwrap();
         buffer.set_current_line(2);
         assert_eq!(1024, buffer.len());
         output.clear();
@@ -995,9 +1028,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .prepare_append(&mut input, Some(Address(0, 0)))
-            .unwrap();
+        append_cmd(&mut buffer, &mut input, Some(Address(0, 0))).unwrap();
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let (bytes, lines) = write_lines(&mut dummy_file, &mut buffer, None).unwrap();
@@ -1011,9 +1042,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .prepare_append(&mut input, Some(Address(0, 0)))
-            .unwrap();
+        append_cmd(&mut buffer, &mut input, Some(Address(0, 0))).unwrap();
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let address = Some(Address(1, buffer.len()));
@@ -1028,9 +1057,7 @@ mod tests {
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         assert!(!buffer.is_dirty());
         let mut input = "one more line\n.\n".as_bytes();
-        buffer
-            .prepare_append(&mut input, Some(Address(0, 0)))
-            .unwrap();
+        append_cmd(&mut buffer, &mut input, Some(Address(0, 0))).unwrap();
         assert!(buffer.is_dirty());
         let mut dummy_file = Vec::new();
         let (bytes, lines) =
@@ -1038,5 +1065,50 @@ mod tests {
         assert_eq!(bytes, 16);
         assert_eq!(lines, 2);
         assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn append_cmd_past_end_gives_error_before_input() {
+        let mut buffer = EditBuffer::new();
+        let mut input = "one\n.\n".as_bytes();
+        let expected = "one\n.\n".as_bytes();
+        let res =
+            append_cmd(&mut buffer, &mut input, Some(Address(2, 2))).expect_err("invalid addr");
+        assert_eq!(0, buffer.len());
+        assert_eq!(input, expected);
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn insert_cmd_past_end_gives_error_before_input() {
+        let mut buffer = EditBuffer::new();
+        let mut input = "one\n.\n".as_bytes();
+        let expected = "one\n.\n".as_bytes();
+        let res =
+            insert_cmd(&mut buffer, &mut input, Some(Address(2, 2))).expect_err("invalid addr");
+        assert_eq!(0, buffer.len());
+        assert_eq!(input, expected);
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn delete_cmd_empty_buffer() {
+        let mut buffer = EditBuffer::new();
+        let res = delete_cmd(&mut buffer, None).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn delete_cmd_line_zero() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let res = delete_cmd(&mut buffer, Some(Address(0, 0))).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn delete_cmd_span_starting_at_zero() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5"]);
+        let res = delete_cmd(&mut buffer, Some(Address(0, 3))).expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 }
