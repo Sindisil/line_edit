@@ -179,13 +179,13 @@ fn edit_cmd(
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
+    writeln!(output, "{} lines ({} bytes) read", lines_read, bytes_read)
+        .map_err(Error::WriteOutput)?;
 
     buffer.clear_text();
     if buffer.append(0, lines) {
         writeln!(output, "missing line terminator appended").map_err(Error::WriteOutput)?;
     }
-    writeln!(output, "{} lines ({} bytes) read", lines_read, bytes_read)
-        .map_err(Error::WriteOutput)?;
     Ok(())
 }
 
@@ -1197,12 +1197,38 @@ mod tests {
     }
 
     #[test]
-    fn edit_cmd_io_error() {
-        todo!();
+    fn read_lines_returns_correct_counts() {
+        let source = b"one\r\ntwo\r\nthree\r\nfour\r\n";
+        let source_bytes = source.len();
+        let mut lines = Vec::new();
+        let (line_count, byte_count) = read_lines(&mut &source[..], &mut lines).expect("no error");
+        assert_eq!(byte_count, source_bytes);
+        assert_eq!(line_count, lines.len());
+    }
+
+    #[test]
+    fn read_lines_io_error() {
+        let mut source = BufReader::new(BadReader {});
+        let res = read_lines(&mut source, &mut Vec::new()).expect_err("io error");
+        assert!(matches!(res, Error::ReadLines(_)));
     }
 
     #[test]
     fn edit_cmd_reads_file() {
-        todo!();
+        let mut buffer = EditBuffer::new();
+        let mut output = Vec::new();
+        let filename1 = Some(Path::new(r"test\assets\text_with_final_eol.txt"));
+        let filename2 = Some(Path::new(r"test\assets\text_with_no_final_eol.txt"));
+
+        edit_cmd(&mut buffer, &mut output, filename1, &None).unwrap();
+        assert_eq!(buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(out_text.contains("10 lines") && out_text.contains("312 bytes"));
+
+        output.clear();
+        edit_cmd(&mut buffer, &mut output, filename2, &None).unwrap();
+        assert_eq!(buffer.len(), 10);
+        let out_text = str::from_utf8(&output[..]).unwrap();
+        assert!(out_text.contains("10 lines") && out_text.contains("318 bytes"));
     }
 }
