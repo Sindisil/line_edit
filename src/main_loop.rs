@@ -13,29 +13,35 @@ use crate::num_utils::NumUtils;
 
 #[derive(Debug)]
 pub enum Error {
-    WriteOutput { source: std::io::Error },
     ParseCmd(command::Error),
     InvalidAddress,
     NestedGlobalCmd,
     UnsupportedGlobalCmd,
     ReadGlobalCmd,
     NoFilename,
-    FileOpen { source: std::io::Error },
+    EditFileOpen { source: std::io::Error },
+    WriteFileOpen { source: std::io::Error },
     WriteLines { source: std::io::Error },
     ReadLines { source: std::io::Error },
+    QuitUnwrittenChanges,
+    EditUnwrittenChanges,
+    EditFileNotFound(String),
 }
 
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match *self {
             Error::ParseCmd(_)
+            | Error::EditFileNotFound(_)
+            | Error::QuitUnwrittenChanges
+            | Error::EditUnwrittenChanges
             | Error::InvalidAddress
             | Error::NestedGlobalCmd
             | Error::UnsupportedGlobalCmd
             | Error::ReadGlobalCmd
             | Error::NoFilename => None,
-            Error::WriteOutput { ref source }
-            | Error::FileOpen { ref source }
+            Error::EditFileOpen { ref source }
+            | Error::WriteFileOpen { ref source }
             | Error::WriteLines { ref source }
             | Error::ReadLines { ref source } => Some(source),
         }
@@ -45,16 +51,29 @@ impl std::error::Error for Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::WriteOutput { .. } => write!(f, "error writing output"),
             Error::ParseCmd(e) => write!(f, "{e}"),
             Error::InvalidAddress => write!(f, "invalid address"),
             Error::NestedGlobalCmd => write!(f, "invalid nested global command"),
             Error::UnsupportedGlobalCmd => write!(f, "unsupported global command"),
             Error::ReadGlobalCmd => write!(f, "error reading global command"),
             Error::NoFilename => write!(f, "no filename"),
-            Error::FileOpen { .. } => write!(f, "error opening file"),
+            Error::EditFileOpen { .. } => write!(f, "error opening file to edit"),
+            Error::WriteFileOpen { .. } => write!(f, "error opening file for writing"),
             Error::WriteLines { .. } => write!(f, "error writing lines"),
             Error::ReadLines { .. } => write!(f, "error reading input lines"),
+            Error::QuitUnwrittenChanges => {
+                write!(
+                    f,
+                    "unwritten changes - repeat quit command to discard changes"
+                )
+            }
+            Error::EditUnwrittenChanges => {
+                write!(
+                    f,
+                    "unwritten changes - repeat edit command to discard changes"
+                )
+            }
+            Error::EditFileNotFound(filename) => write!(f, "{filename} not found"),
         }
     }
 }
@@ -64,7 +83,7 @@ impl fmt::Display for Error {
 /// Handles prompting, command input, command dispatch, and error display.
 pub fn run(
     mut input: impl BufRead,
-    mut output: impl Write,
+    mut stdout: impl Write,
     args: &cli::CmdArgs,
 ) -> Result<(), Error> {
     let mut buffer = EditBuffer::new();
@@ -73,15 +92,16 @@ pub fn run(
     let mut previous_pattern: Option<regex::Regex> = None;
 
     if let Some(file) = &args.file {
-        edit_cmd(&mut buffer, &mut output, Some(file), &previous_cmd)
-            .or_else(|e| writeln!(output, "{e}").map_err(|source| Error::WriteOutput { source }))?;
+        edit_cmd(&mut buffer, &mut stdout, Some(file), &previous_cmd)
+            .or_else(|e| writeln!(stdout, "{e}"))
+            .unwrap();
     }
 
     // Accept and process commands until fatal error or exit
     let mut done = false;
     while !done {
         // write prompt
-        write_prompt(&mut output)?;
+        write_prompt(&mut stdout);
 
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
@@ -91,26 +111,27 @@ pub fn run(
                     Cmd::Append(address) => append_cmd(&mut buffer, &mut input, *address),
                     Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
                     Cmd::Edit(filename) => {
-                        edit_cmd(&mut buffer, &mut output, filename.as_deref(), &previous_cmd)
+                        edit_cmd(&mut buffer, &mut stdout, filename.as_deref(), &previous_cmd)
                     }
-                    Cmd::Enumerate(address) => enumerate_cmd(&mut buffer, &mut output, *address),
-                    Cmd::File(filename) => file_cmd(&mut buffer, &mut output, filename.as_deref()),
+                    Cmd::Enumerate(address) => enumerate_cmd(&mut buffer, &mut stdout, *address),
+                    Cmd::File(filename) => {
+                        file_cmd(&mut buffer, &mut stdout, filename.as_deref());
+                        Ok(())
+                    }
                     Cmd::Global(address, pattern, commands) => global_cmd(
                         &mut buffer,
-                        &mut output,
+                        &mut stdout,
                         *address,
                         pattern,
                         commands,
                         &mut previous_pattern,
                     ),
                     Cmd::Insert(address) => insert_cmd(&mut buffer, &mut input, *address),
-                    Cmd::Null(address) => null_cmd(&mut buffer, &mut output, *address),
-                    Cmd::Print(address) => print_cmd(&mut buffer, &mut output, *address),
-                    Cmd::Quit => quit_cmd(&mut output, &buffer, &previous_cmd).map(|ok_to_exit| {
-                        done = ok_to_exit;
-                    }),
+                    Cmd::Null(address) => null_cmd(&mut buffer, &mut stdout, *address),
+                    Cmd::Print(address) => print_cmd(&mut buffer, &mut stdout, *address),
+                    Cmd::Quit => quit_cmd(&buffer, &previous_cmd).map(|_| done = true),
                     Cmd::Write(address, filename) => {
-                        write_file(&mut buffer, &mut output, *address, filename.as_deref())
+                        write_file(&mut buffer, &mut stdout, *address, filename.as_deref())
                     }
                     Cmd::Undo => {
                         buffer.do_undo();
@@ -124,10 +145,10 @@ pub fn run(
                 previous_cmd = Some(cmd);
                 res
             })
-            .or_else(|e| match e {
-                Error::WriteOutput { .. } => Err(e),
-                non_fatal_error => writeln!(output, "{non_fatal_error}")
-                    .map_err(|source| Error::WriteOutput { source }),
+            .or_else(|e| {
+                writeln!(stdout, "{e}").unwrap();
+                stdout.flush().unwrap();
+                Ok(())
             })?;
     }
     Ok(())
@@ -161,17 +182,12 @@ fn delete_cmd(buffer: &mut EditBuffer, address: Option<Address>) -> Result<(), E
 
 fn edit_cmd(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     filename: Option<&Path>,
     previous_cmd: &Option<Cmd>,
 ) -> Result<(), Error> {
     if buffer.is_dirty() && !matches!(previous_cmd, Some(Cmd::Edit(_))) {
-        writeln!(
-            output,
-            "unwritten changes - repeat edit command to discard changes"
-        )
-        .map_err(|source| Error::WriteOutput { source })?;
-        return Ok(());
+        return Err(Error::EditUnwrittenChanges);
     }
 
     if let Some(filename) = filename {
@@ -186,32 +202,30 @@ fn edit_cmd(
         Err(e) => {
             return match e.kind() {
                 io::ErrorKind::NotFound => {
-                    writeln!(output, "{} not found", filename.display())
-                        .map_err(|source| Error::WriteOutput { source })?;
+                    let missing_file = String::from(filename.to_string_lossy());
                     buffer.clear_text();
-                    Ok(())
+                    Err(Error::EditFileNotFound(missing_file))
                 }
-                _ => Err(Error::FileOpen { source: e }),
-            }
+                _ => Err(Error::EditFileOpen { source: e }),
+            };
         }
     };
 
     let mut lines = Vec::new();
     let (lines_read, bytes_read) = read_lines(&mut source, &mut lines)?;
-    writeln!(output, "{lines_read} lines ({bytes_read} bytes) read")
-        .map_err(|source| Error::WriteOutput { source })?;
+    writeln!(stdout, "{lines_read} lines ({bytes_read} bytes) read").unwrap();
 
     buffer.clear_text();
     if buffer.append(0, lines) {
-        writeln!(output, "missing line terminator appended")
-            .map_err(|source| Error::WriteOutput { source })?;
+        stdout.flush().unwrap();
+        writeln!(stdout, "missing line terminator appended").unwrap();
     }
     Ok(())
 }
 
 fn enumerate_cmd(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     let span = if let Some(Address(b, e)) = address {
@@ -236,38 +250,29 @@ fn enumerate_cmd(
     buffer.set_current_line(*span.end());
 
     for (i, l) in buffer[span].iter().enumerate() {
-        output
+        stdout
             .write_all(format!("{:>width$}  {l}", start + i).as_bytes())
-            .map_err(|source| Error::WriteOutput { source })?;
+            .unwrap();
     }
-    output
-        .flush()
-        .map_err(|source| Error::WriteOutput { source })?;
+    stdout.flush().unwrap();
     Ok(())
 }
 
-fn file_cmd(
-    buffer: &mut EditBuffer,
-    output: &mut impl Write,
-    filename: Option<&Path>,
-) -> Result<(), Error> {
+fn file_cmd(buffer: &mut EditBuffer, stdout: &mut impl Write, filename: Option<&Path>) {
     if let Some(filename) = filename {
         buffer.set_filename(Some(filename.to_owned()));
     }
 
     match buffer.filename() {
-        None => {
-            writeln!(output, "no current filename").map_err(|source| Error::WriteOutput { source })
-        }
-        Some(f) => {
-            writeln!(output, "{}", f.display()).map_err(|source| Error::WriteOutput { source })
-        }
+        None => writeln!(stdout, "no current filename").unwrap(),
+        Some(f) => writeln!(stdout, "{}", f.display()).unwrap(),
     }
+    stdout.flush().unwrap();
 }
 
 fn global_cmd(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     address: Option<Address>,
     pattern: &Regex,
     commands: &str,
@@ -293,9 +298,9 @@ fn global_cmd(
         let cmd =
             Cmd::read(&mut input, buffer, previous_pattern).map_err(|_| Error::ReadGlobalCmd)?;
         match cmd {
-            Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
+            Cmd::Enumerate(address) => enumerate_cmd(buffer, stdout, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
-            Cmd::Null(address) | Cmd::Print(address) => print_cmd(buffer, output, address)?,
+            Cmd::Null(address) | Cmd::Print(address) => print_cmd(buffer, stdout, address)?,
             _ => return Err(Error::UnsupportedGlobalCmd),
         }
     }
@@ -319,7 +324,7 @@ fn insert_cmd(
 
 fn null_cmd(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     match address {
@@ -329,20 +334,20 @@ fn null_cmd(
             }
             print_cmd(
                 buffer,
-                output,
+                stdout,
                 Some(Address(
                     buffer.current_line() + 1,
                     buffer.current_line() + 1,
                 )),
             )
         }
-        _ => print_cmd(buffer, output, address),
+        _ => print_cmd(buffer, stdout, address),
     }
 }
 
 fn print_cmd(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     address: Option<Address>,
 ) -> Result<(), Error> {
     let span = if let Some(Address(b, e)) = address {
@@ -364,13 +369,9 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        output
-            .write_all(l.as_bytes())
-            .map_err(|source| Error::WriteOutput { source })?;
+        stdout.write_all(l.as_bytes()).unwrap();
     }
-    output
-        .flush()
-        .map_err(|source| Error::WriteOutput { source })?;
+    stdout.flush().unwrap();
     Ok(())
 }
 
@@ -378,22 +379,11 @@ fn print_cmd(
 ///
 /// Displays warning and doesn't actually exit if unwritten
 /// buffer changes are detected.
-fn quit_cmd(
-    output: &mut impl Write,
-    buffer: &EditBuffer,
-    previous_cmd: &Option<Cmd>,
-) -> Result<bool, Error> {
+fn quit_cmd(buffer: &EditBuffer, previous_cmd: &Option<Cmd>) -> Result<(), Error> {
     match previous_cmd {
-        Some(Cmd::Quit) => Ok(true),
-        _ if !buffer.is_dirty() => Ok(true),
-        _ => {
-            writeln!(
-                output,
-                "Unwritten changes - repeat quit command to discard changes."
-            )
-            .map_err(|source| Error::WriteOutput { source })?;
-            Ok(false)
-        }
+        Some(Cmd::Quit) => Ok(()),
+        _ if !buffer.is_dirty() => Ok(()),
+        _ => Err(Error::QuitUnwrittenChanges),
     }
 }
 
@@ -420,7 +410,7 @@ fn read_lines(source: &mut impl BufRead, lines: &mut Vec<String>) -> Result<(usi
 
 fn write_file(
     buffer: &mut EditBuffer,
-    output: &mut impl Write,
+    stdout: &mut impl Write,
     address: Option<Address>,
     filename: Option<&Path>,
 ) -> Result<(), Error> {
@@ -435,14 +425,15 @@ fn write_file(
         .write(true)
         .create(true)
         .open(buffer.filename().as_ref().unwrap())
-        .map_err(|source| Error::FileOpen { source })?;
+        .map_err(|source| Error::WriteFileOpen { source })?;
 
     let (bytes_written, lines_written) = write_lines(&mut destination, buffer, address)?;
     writeln!(
-        output,
+        stdout,
         "{bytes_written} bytes written ({lines_written} lines)"
     )
-    .map_err(|source| Error::WriteOutput { source })?;
+    .unwrap();
+    stdout.flush().unwrap();
     Ok(())
 }
 
@@ -478,12 +469,9 @@ fn write_lines(
     Ok((total_bytes_written, lines_written))
 }
 
-fn write_prompt(output: &mut impl Write) -> Result<(), Error> {
-    write!(output, ":").map_err(|source| Error::WriteOutput { source })?;
-    output
-        .flush()
-        .map_err(|source| Error::WriteOutput { source })?;
-    Ok(())
+fn write_prompt(stdout: &mut impl Write) {
+    write!(stdout, ":").unwrap();
+    stdout.flush().unwrap();
 }
 
 #[cfg(test)]
@@ -517,16 +505,9 @@ mod tests {
     // write_prompt() tests
 
     #[test]
-    fn write_prompt_io_error_gives_correct_error() {
-        let mut output = BadWriter {};
-        let res = write_prompt(&mut output).expect_err("io::error");
-        assert!(matches!(res, Error::WriteOutput { .. }));
-    }
-
-    #[test]
     fn write_prompt_clean_buffer() {
         let mut output = Vec::new();
-        write_prompt(&mut output).unwrap();
+        write_prompt(&mut output);
         assert_eq!(b":", &output[..]);
     }
 
@@ -639,7 +620,7 @@ mod tests {
     fn print_filename_none_set() {
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
         let mut output = Vec::new();
-        file_cmd(&mut buffer, &mut output, None).unwrap();
+        file_cmd(&mut buffer, &mut output, None);
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "no current filename\n"
@@ -657,8 +638,7 @@ mod tests {
             &mut buffer,
             &mut output,
             Some(Path::new(new_filename.trim())),
-        )
-        .unwrap();
+        );
         assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -673,11 +653,10 @@ mod tests {
             &mut buffer,
             &mut output,
             Some(Path::new(new_filename.trim())),
-        )
-        .unwrap();
+        );
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
         output.clear();
-        file_cmd(&mut buffer, &mut output, None).unwrap();
+        file_cmd(&mut buffer, &mut output, None);
         assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
     }
 
@@ -687,14 +666,13 @@ mod tests {
         let new_filename = "a_new_filename.txt\n";
         let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
         let mut output = Vec::new();
-        file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename))).unwrap();
+        file_cmd(&mut buffer, &mut output, Some(Path::new(orig_filename)));
         output.clear();
         file_cmd(
             &mut buffer,
             &mut output,
             Some(Path::new(new_filename.trim())),
-        )
-        .unwrap();
+        );
         assert_eq!(str::from_utf8(&output[..]).unwrap(), new_filename);
         assert_eq!(Some(Path::new(new_filename.trim())), buffer.filename());
     }
@@ -891,10 +869,8 @@ mod tests {
         let mut output = Vec::new();
 
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
-        assert_eq!(
-            &b"::Unwritten changes - repeat quit command to discard changes.\n:"[..],
-            &output[..]
-        );
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("unwritten changes - repeat quit"));
     }
 
     #[test]
@@ -964,7 +940,7 @@ mod tests {
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
-        assert!(output.contains("Unwritten changes"));
+        assert!(output.contains("unwritten changes"));
         assert!(!output.contains("one"));
     }
 
@@ -1018,7 +994,7 @@ mod tests {
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("two\n"));
-        assert!(output.contains("Unwritten changes"));
+        assert!(output.contains("unwritten changes"));
         assert!(!output.contains("one"));
     }
 
@@ -1083,7 +1059,7 @@ mod tests {
         run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert!(output.contains("invalid address"));
-        assert!(output.contains("Unwritten changes"));
+        assert!(output.contains("unwritten changes"));
     }
 
     #[test]
@@ -1221,13 +1197,16 @@ mod tests {
     }
 
     #[test]
-    fn edit_cmd_missing_file_not_an_error() {
-        let mut buffer = EditBuffer::new();
+    fn edit_cmd_missing_file_clears_buffer_sets_filename() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        assert_eq!(buffer.len(), 3);
         let mut output = Vec::new();
         let not_a_file = Some(Path::new("non-existant_file.txt"));
-        edit_cmd(&mut buffer, &mut output, not_a_file, &None).expect("no error");
+        let res =
+            edit_cmd(&mut buffer, &mut output, not_a_file, &None).expect_err("EditFileNotFound");
+        assert!(matches!(res, Error::EditFileNotFound(_)));
         assert_eq!(buffer.filename(), not_a_file);
-        assert!(str::from_utf8(&output[..]).unwrap().contains("not found"));
+        assert!(buffer.is_empty());
     }
 
     #[test]

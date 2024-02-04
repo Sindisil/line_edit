@@ -67,16 +67,13 @@ pub fn parse_args(
     while let Some(arg) = parser.next().map_err(|source| Error::NextArg { source })? {
         match arg {
             Short('h') | Long("help") => {
-                writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}")
-                    .expect("Writing to stdout shouldn't fail");
-                writeln!(&mut output, "Version {APP_VERSION}")
-                    .expect("writing to stdout shouldn't fail");
-                write!(&mut output, "{APP_HELP}").expect("writing to stdout shouldn't fail");
+                writeln!(&mut output, "{APP_NAME} - {APP_DESCRIPTION}").unwrap();
+                writeln!(&mut output, "Version {APP_VERSION}").unwrap();
+                write!(&mut output, "{APP_HELP}").unwrap();
                 return Err(Error::WroteMessage);
             }
             Short('V') | Long("version") => {
-                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}")
-                    .expect("writing to stdout shouldn't fail");
+                writeln!(&mut output, "{APP_NAME} version {APP_VERSION}").unwrap();
                 return Err(Error::WroteMessage);
             }
             Value(val) if cmd_args.file.is_none() => cmd_args.file = Some(PathBuf::from(val)),
