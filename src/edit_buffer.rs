@@ -4,7 +4,7 @@
 // containing the lines of text.
 mod undo_stack;
 
-use std::cmp::Ordering;
+use std::cmp::{self, Ordering};
 use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
 
@@ -208,6 +208,36 @@ impl EditBuffer {
         eol_added
     }
 
+    pub fn do_change(&mut self, address: Option<Address>, lines: Vec<String>) {
+        let mut change = ChangeSet::new();
+        change.current_line_before = self.current_line;
+
+        // handle deletion of addressed lines
+        let b = cmp::max(1, address.map_or(self.current_line, |addr| addr.0));
+        let e = address.map_or(self.current_line, |addr| addr.1);
+        let mut removed: Vec<String> = Vec::new();
+        if b <= e {
+            removed.extend(self.text.splice(b - 1..e, None));
+        }
+
+        // handle insertion of new lines, if any
+        if lines.is_empty() {
+            // remove only
+            self.current_line = usize::min(self.text.len(), b);
+        } else {
+            let b = b.saturating_sub(1);
+            self.append(b, lines.clone());
+            self.current_line = b + lines.len();
+            change.push_add(b, lines);
+        }
+
+        if !removed.is_empty() {
+            change.push_remove(b - 1, removed);
+        }
+        change.current_line_after = self.current_line;
+        self.undo_stack.push_undo(change);
+    }
+
     pub fn do_delete(&mut self, address: Option<Address>) {
         let (b, e) = address.map_or((self.current_line, self.current_line), |addr| {
             (addr.0, addr.1)
@@ -237,10 +267,11 @@ impl EditBuffer {
         if lines.is_empty() {
             self.current_line = location;
         } else {
-            // set default_eol if neccessary
-            self.default_eol
-                .get_or_insert_with(|| compute_default_eol(&lines));
-            self.text.splice(location..location, lines.iter().cloned());
+            //            // set default_eol if neccessary
+            //            self.default_eol
+            //                .get_or_insert_with(|| compute_default_eol(&lines));
+            //            self.text.splice(location..location, lines.iter().cloned());
+            self.append(location, lines.clone());
             self.current_line = location + lines.len();
             change.push_add(location, lines);
         }
@@ -581,6 +612,118 @@ mod tests {
         assert_eq!(2, buffer.current_line);
         assert_eq!(3, buffer.len());
         assert_eq!(buffer[..], expected[..]);
+    }
+
+    #[test]
+    fn do_undo_redo_change_span() {
+        let mut buffer = EditBuffer::new();
+        let orig = EditBuffer::new();
+
+        let expected1 = EditBuffer::from(vec!["1\n", "2", "3"]);
+        buffer.do_change(Some(Address(0, 0)), expected1[..].to_vec());
+        assert_eq!(buffer[..], expected1[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        let expected2 = EditBuffer::from(vec!["1\n", "2", "4", "5", "6", "7", "8"]);
+        buffer.do_change(None, expected2[3..].to_vec());
+        assert_eq!(buffer[..], expected2[..]);
+        assert_eq!(buffer.current_line(), 7);
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], expected1[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        buffer.do_redo();
+        assert_eq!(buffer[..], expected2[..]);
+        assert_eq!(buffer.current_line(), 7);
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], expected1[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        let expected3 = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        buffer.do_change(Some(Address(2, 3)), expected3[2..].to_vec());
+        assert_eq!(buffer[..], expected3[..]);
+        assert_eq!(buffer.current_line(), 6);
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], expected1[..]);
+        assert_eq!(buffer.current_line(), 3);
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], expected2[..]);
+        assert_eq!(buffer.current_line(), 7);
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], expected1[..]);
+        assert_eq!(buffer.current_line(), 3);
+        assert!(buffer.is_dirty());
+
+        buffer.do_undo();
+        assert!(buffer.is_empty());
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), 0);
+        assert!(!buffer.is_dirty());
+
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), 0);
+    }
+
+    #[test]
+    fn do_undo_redo_change_line_0() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let orig = buffer.clone();
+        let lines = vec!["changed\n".to_owned()];
+        assert_eq!(buffer.current_line(), 3);
+        assert_eq!(buffer[1], "1\n");
+
+        buffer.do_change(Some(Address(0, 0)), lines);
+        assert_eq!(buffer.current_line(), 1);
+        assert_eq!(buffer[1], "changed\n");
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+    }
+
+    #[test]
+    fn do_undo_redo_change_span_no_input() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
+        let lines = Vec::new();
+        assert_eq!(buffer.current_line(), 6);
+        let orig = buffer.clone();
+
+        buffer.do_change(Some(Address(3, 5)), lines);
+        assert_eq!(buffer.current_line(), 3);
+        assert_eq!(buffer[3], "6\n");
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        let mut buffer = orig.clone();
+        assert_eq!(buffer.current_line(), 6);
+        buffer.do_change(Some(Address(5, 6)), Vec::new());
+        assert_eq!(buffer.current_line(), 4);
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        let mut buffer = orig.clone();
+        assert_eq!(buffer.current_line(), 6);
+        buffer.do_change(Some(Address(0, 2)), Vec::new());
+        assert_eq!(buffer.current_line(), 1);
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
+
+        let mut buffer = orig.clone();
+        assert_eq!(buffer.current_line(), 6);
+        buffer.do_change(Some(Address(1, 6)), Vec::new());
+        assert_eq!(buffer.current_line(), 0);
+        assert!(buffer.is_empty());
+        buffer.do_undo();
+        assert_eq!(buffer[..], orig[..]);
+        assert_eq!(buffer.current_line(), orig.current_line());
     }
 
     #[test]
