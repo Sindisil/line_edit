@@ -110,6 +110,7 @@ pub fn run(
                     // dispatch editor commands
                     Cmd::Append(address) => append_cmd(&mut buffer, &mut input, *address),
                     Cmd::Delete(address) => delete_cmd(&mut buffer, *address),
+                    Cmd::Change(address) => change_cmd(&mut buffer, &mut input, *address),
                     Cmd::Edit(filename) => {
                         edit_cmd(&mut buffer, &mut stdout, filename.as_deref(), &previous_cmd)
                     }
@@ -166,6 +167,21 @@ fn append_cmd(
     Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
     //    let location = address.map_or(buffer.current_line(), |addr| addr.1);
     buffer.do_append(address, lines);
+    Ok(())
+}
+
+fn change_cmd(
+    buffer: &mut EditBuffer,
+    input: &mut impl BufRead,
+    address: Option<Address>,
+) -> Result<(), Error> {
+    if address.is_some_and(|a| a.1 > buffer.len()) {
+        return Err(Error::InvalidAddress);
+    }
+
+    let mut lines = Vec::new();
+    Cmd::read_lines(input, &mut lines).map_err(|source| Error::ReadLines { source })?;
+    buffer.do_change(address, lines);
     Ok(())
 }
 
@@ -955,6 +971,15 @@ mod tests {
     }
 
     #[test]
+    fn change_cmd_dispatch() {
+        let input = b"a\n1\n2\n3\n4\n.\n2,3c\na\nb\n.\n1,$p\nq\nq\n";
+        let mut output = Vec::new();
+        run(&mut &input[..], &mut output, &CmdArgs::default()).unwrap();
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert!(output.contains("1\na\nb\n4\n"));
+    }
+
+    #[test]
     fn edit_cmd_dispatch() {
         let input = b"e test/assets/text_with_final_eol.txt\nq\n";
         let mut output = Vec::new();
@@ -1243,5 +1268,21 @@ mod tests {
         assert_eq!(buffer.len(), 10);
         let out_text = str::from_utf8(&output[..]).unwrap();
         assert!(out_text.contains("10 lines") && out_text.contains("318 bytes"));
+    }
+
+    #[test]
+    fn change_cmd_addr_starting_after_buffer_end_gives_error() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let res = change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(5, 6)))
+            .expect_err("illegal address");
+        assert!(matches!(res, Error::InvalidAddress));
+    }
+
+    #[test]
+    fn change_cmd_addr_ending_past_buffer_end_gives_error() {
+        let mut buffer = EditBuffer::from(vec!["1\n", "2", "3"]);
+        let res = change_cmd(&mut buffer, &mut &b".\n"[..], Some(Address(2, 4)))
+            .expect_err("illegal address");
+        assert!(matches!(res, Error::InvalidAddress));
     }
 }

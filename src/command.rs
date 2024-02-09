@@ -14,6 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 #[derive(Debug, Clone)]
 pub enum Cmd {
     Append(Option<Address>),
+    Change(Option<Address>),
     Delete(Option<Address>),
     Edit(Option<PathBuf>),
     Enumerate(Option<Address>),
@@ -128,6 +129,7 @@ impl Cmd {
         let address = eval_address(&mut graphemes, buffer, previous_pattern)?;
         match graphemes.next() {
             Some("a") => parse_no_args(&mut graphemes, Cmd::Append(address)),
+            Some("c") => parse_no_args(&mut graphemes, Cmd::Change(address)),
             Some("d") => parse_no_args(&mut graphemes, Cmd::Delete(address)),
             Some("e") => parse_edit_cmd(&mut graphemes, address),
             Some("f") => parse_file_cmd(&mut graphemes, address),
