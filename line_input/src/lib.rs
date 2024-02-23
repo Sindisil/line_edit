@@ -37,12 +37,14 @@ impl Default for LineInput {
 impl LineInput {
     #[must_use]
     pub fn new() -> LineInput {
-        LineInput {
-            input: GapBuffer::new(),
-        }
+        LineInput { input: GapBuffer::new() }
     }
 
-    pub fn read_line(&mut self, _buf: &mut String, _prompt: &str) -> io::Result<Response> {
+    pub fn read_line(
+        &mut self,
+        _buf: &mut String,
+        _prompt: &str,
+    ) -> io::Result<Response> {
         todo!();
         // clear gap buffer
         // init render_ctx
@@ -109,8 +111,7 @@ impl GapBuffer {
     fn gap_to_position(&mut self) {
         match self.position.cmp(&self.before_gap.len()) {
             Ordering::Less => {
-                self.after_gap
-                    .insert_str(0, &self.before_gap[self.position..]);
+                self.after_gap.insert_str(0, &self.before_gap[self.position..]);
                 self.before_gap.drain(self.position..);
             }
             Ordering::Greater => {
@@ -180,7 +181,10 @@ mod tests {
         let mut stdout = io::stdout();
         let prompt = "";
         let mut render_ctx = RenderContext::new(&prompt, &mut stdout);
-        let event = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let event = Event::Key(KeyEvent::new(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        ));
         let res = input.handle_event(&mut render_ctx, event).unwrap();
         assert!(matches!(res, Some(Response::Cancel)));
     }
@@ -198,7 +202,8 @@ mod tests {
         let mut stdout = io::stdout();
         let prompt = "";
         let mut render_ctx = RenderContext::new(&prompt, &mut stdout);
-        let event = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = input.handle_event(&mut render_ctx, event).unwrap();
         assert!(matches!(res, Some(Response::Accept(_))));
         if let Some(Response::Accept(bytes)) = res {

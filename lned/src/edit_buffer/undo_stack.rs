@@ -81,10 +81,7 @@ impl ChangeSet {
 
 impl UndoStack {
     pub fn new() -> Self {
-        UndoStack {
-            undo: Vec::new(),
-            redo: Vec::new(),
-        }
+        UndoStack { undo: Vec::new(), redo: Vec::new() }
     }
 
     /// Push the supplied Undoable onto the undo stack.

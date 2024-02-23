@@ -12,7 +12,8 @@ use std::io;
 use std::iter;
 
 fn main() {
-    let args = match cli::parse_args(&mut io::stdout().lock(), wild::args_os()) {
+    let args = match cli::parse_args(&mut io::stdout().lock(), wild::args_os())
+    {
         Ok(args) => args,
         Err(cli::Error::WroteMessage) => std::process::exit(0),
         Err(err) => {
@@ -20,11 +21,15 @@ fn main() {
             std::process::exit(1);
         }
     };
-    if let Err(err) = main_loop::run(io::stdin().lock(), io::stdout().lock(), &args) {
+    if let Err(err) =
+        main_loop::run(io::stdin().lock(), io::stdout().lock(), &args)
+    {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
             println!("\nCaused by:");
-            for (i, error) in iter::successors(Some(cause), |&e| e.source()).enumerate() {
+            for (i, error) in
+                iter::successors(Some(cause), |&e| e.source()).enumerate()
+            {
                 eprintln!("    {i}: {error}");
             }
             std::process::exit(1);
