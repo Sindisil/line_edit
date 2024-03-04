@@ -1,7 +1,7 @@
 use core::cmp;
 use core::fmt::{self, Debug, Display, Formatter};
 use std::io::{self};
-use std::iter::{Iterator, Peekable};
+use std::iter::Peekable;
 use std::path::PathBuf;
 
 use regex::Regex;

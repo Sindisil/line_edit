@@ -8,10 +8,10 @@ use std::cmp::{self, Ordering};
 use std::ops::{Index, Range, RangeFrom, RangeFull, RangeInclusive};
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
+
 use crate::command::Address;
 use crate::edit_buffer::undo_stack::{ChangeSet, Diff, UndoStack};
-
-use regex::Regex;
 
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
@@ -351,18 +351,10 @@ impl EditBuffer {
     }
 }
 
-fn compute_native_eol() -> &'static str {
-    if std::env::consts::FAMILY == "windows" {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
 fn compute_default_eol(
     lines: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> &'static str {
-    let native_eol = compute_native_eol();
+    let native_eol = line_input::native_eol();
     let mut crlf = 0;
     let mut lf = 0;
 
@@ -490,7 +482,7 @@ mod tests {
     #[test]
     fn default_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(compute_native_eol(), compute_default_eol(&lines));
+        assert_eq!(compute_default_eol(&lines), line_input::native_eol());
     }
 
     /////

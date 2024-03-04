@@ -528,11 +528,6 @@ fn write_lines(
     Ok((total_bytes_written, lines_written))
 }
 
-fn write_prompt(stdout: &mut impl Write) {
-    write!(stdout, ":").unwrap();
-    stdout.flush().unwrap();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,15 +556,6 @@ mod tests {
     }
 
     /////
-    // write_prompt() tests
-
-    #[test]
-    fn write_prompt_clean_buffer() {
-        let mut output = Vec::new();
-        write_prompt(&mut output);
-        assert_eq!(b":", &output[..]);
-    }
-
     #[test]
     fn null_cmd_no_addr() {
         let mut output = Vec::new();

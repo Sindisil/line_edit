@@ -6,7 +6,7 @@ use crossterm::cursor::{
     self, Hide, MoveTo, MoveToNextLine, RestorePosition, SavePosition, Show,
 };
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use crossterm::terminal::{self, Clear, ClearType};
+use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{ExecutableCommand, QueueableCommand};
 use unicode_width::UnicodeWidthStr;
 
@@ -38,7 +38,7 @@ pub trait LineRead {
 
 #[derive(Debug)]
 pub struct LineInput {
-    input: GapBuffer,
+    buffer: GapBuffer,
 }
 
 // Private structs and enums
@@ -67,6 +67,18 @@ enum Response {
     Continue,
 }
 
+// public functions
+////////
+
+#[must_use]
+pub fn native_eol() -> &'static str {
+    if std::env::consts::FAMILY == "windows" {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
 // impls for LineInput
 ////////
 
@@ -79,17 +91,17 @@ impl Default for LineInput {
 impl LineInput {
     #[must_use]
     pub fn new() -> LineInput {
-        LineInput { input: GapBuffer::new() }
+        LineInput { buffer: GapBuffer::new() }
     }
 
-    fn input_line(
+    fn accept_line(
         &mut self,
-        buffer: &mut String,
+        output_buffer: &mut String,
         prompt: &str,
         cancelable: bool,
     ) -> io::Result<Option<usize>> {
         // clear gap buffer
-        self.input.clear();
+        self.buffer.clear();
 
         // init render_ctx
         let mut stdout = io::stdout();
@@ -98,17 +110,22 @@ impl LineInput {
 
         // loop handling events until handle_event() returns a Reponse
         loop {
-            render_ctx.repaint(&self.input)?;
+            render_ctx.repaint(&self.buffer)?;
 
             // get next event
             let event = event::read()?;
 
             // handle event
-            let response = self.handle_event(buffer, &event);
+            let response = match event {
+                Event::Key(event) => self.handle_key_event(event),
+                _ => Response::Continue,
+            };
 
             match response {
                 Response::Accept(bytes_read) => {
-                    render_ctx.stdout.execute(MoveToNextLine(1))?;
+                    render_ctx.move_to_end(&mut self.buffer)?;
+                    output_buffer.extend(self.buffer.before_gap.drain(..));
+                    output_buffer.extend(self.buffer.after_gap.drain(..));
                     return Ok(Some(bytes_read));
                 }
                 Response::Cancel => {
@@ -122,28 +139,33 @@ impl LineInput {
         }
     }
 
-    fn handle_event(&mut self, buffer: &mut String, event: &Event) -> Response {
-        match event {
-            Event::Key(event) => self.handle_key_event(buffer, event),
-            _ => Response::Continue,
-        }
-    }
-
-    fn handle_key_event(
-        &mut self,
-        buffer: &mut String,
-        event: &KeyEvent,
-    ) -> Response {
+    fn handle_key_event(&mut self, event: KeyEvent) -> Response {
         match event.code {
             KeyCode::Char('d') if event.modifiers == KeyModifiers::CONTROL => {
                 Response::Cancel
             }
             KeyCode::Enter => {
-                let bytes_read = self.input.len();
-                buffer.extend(self.input.before_gap.drain(..));
-                buffer.extend(self.input.after_gap.drain(..));
-                self.input.cursor = 0;
+                self.buffer.after_gap.push_str(native_eol());
+                let bytes_read = self.buffer.len();
                 Response::Accept(bytes_read)
+            }
+            KeyCode::Left => {
+                todo!("move cursor left until previous base char");
+            }
+            KeyCode::Right => {
+                todo!("move cursor right until next base char");
+            }
+            KeyCode::Backspace => {
+                todo!("remove code point to left of cursor, but cursor doesn't move unless iit has width > 0");
+            }
+            KeyCode::Delete => {
+                todo!("remove base char at cursor, along with any zero width code points to its right up until next base char");
+            }
+            KeyCode::Char(c) => {
+                self.buffer.gap_to_cursor();
+                self.buffer.before_gap.push(c);
+                self.buffer.cursor = self.buffer.before_gap.len();
+                Response::Continue
             }
             _ => Response::Continue,
         }
@@ -156,7 +178,7 @@ impl LineRead for LineInput {
         buffer: &mut String,
         prompt: &str,
     ) -> io::Result<usize> {
-        Ok(self.input_line(buffer, prompt, false)?.unwrap_or(0))
+        Ok(self.accept_line(buffer, prompt, false)?.unwrap_or(0))
     }
 
     fn read_line_or_cancel(
@@ -164,9 +186,10 @@ impl LineRead for LineInput {
         buffer: &mut String,
         prompt: &str,
     ) -> io::Result<Option<usize>> {
-        self.input_line(buffer, prompt, true)
+        self.accept_line(buffer, prompt, true)
     }
 }
+
 // impls for GapBuffer
 ////////
 
@@ -201,6 +224,17 @@ impl GapBuffer {
         self.cursor = 0;
     }
 
+    fn ends_with(&self, needle: &str) -> bool {
+        self.before_gap.ends_with(needle) || self.after_gap.ends_with(needle)
+    }
+
+    /// Moves characters in buffer so that cursor is logically on the first
+    /// char of `after_gap`, meaning that the insertion point (where new chars
+    /// are added) is logically at the end of `before_gap`.
+    ///
+    /// Cursor will always be pointing to the base character of any
+    /// multi-character grapheme, and no grapheme will be split by the
+    /// gap.
     fn gap_to_cursor(&mut self) {
         match self.cursor.cmp(&self.before_gap.len()) {
             Ordering::Less => {
@@ -253,6 +287,37 @@ impl<'a> RenderContext<'a> {
         self.terminal_height().saturating_sub(self.prompt_line)
     }
 
+    fn move_to_end(&mut self, buffer: &mut GapBuffer) -> io::Result<()> {
+        let (mut cur_col, mut cur_line) = cursor::position()?;
+        let after_gap_width = buffer.after_gap.width();
+        let term_height = self.terminal_height() as usize;
+        let last_line = (after_gap_width / self.terminal_width() as usize)
+            + cur_line as usize;
+        let new_cursor_line = last_line + 1;
+        if new_cursor_line >= term_height {
+            let scroll_needed = new_cursor_line - term_height + 1;
+            if scroll_needed >= term_height {
+                cur_line = 0;
+                cur_col = 0;
+            } else {
+                let scroll_needed = u16::try_from(scroll_needed).expect(
+                    "scroll_needed < term_height, so should fit in u16",
+                );
+                self.stdout.queue(ScrollUp(scroll_needed))?;
+                cur_line -= scroll_needed;
+            }
+            self.stdout
+                .queue(MoveTo(cur_col, cur_line))?
+                .queue(Clear(ClearType::FromCursorDown))?;
+            let offset = after_gap_width.saturating_sub(
+                ((self.terminal_height() - 1) * self.terminal_width()) as usize,
+            );
+            write!(self.stdout, "{}", &buffer.after_gap[offset..])?;
+        }
+        self.stdout.queue(MoveToNextLine(1))?;
+        self.stdout.flush()
+    }
+
     fn repaint(&mut self, buffer: &GapBuffer) -> io::Result<()> {
         self.stdout.queue(Hide)?;
 
@@ -264,13 +329,13 @@ impl<'a> RenderContext<'a> {
         let lines_to_print = (width + column_estimate) / width;
 
         // if necessary, scroll to make room (nb: manual scroll because of bugs)
-        let lines_needed = u16::try_from(
+        let required_lines = u16::try_from(
             lines_to_print.saturating_sub(self.lines_available().into()),
         )
         .unwrap_or(self.terminal_height());
-        if lines_needed > 0 {
-            self.scroll(lines_needed)?;
-            self.prompt_line = self.prompt_line.saturating_sub(lines_needed);
+        if required_lines > 0 {
+            self.scroll(required_lines)?;
+            self.prompt_line = self.prompt_line.saturating_sub(required_lines);
         }
 
         // move cursor to start of prompt & clear to
@@ -289,6 +354,8 @@ impl<'a> RenderContext<'a> {
 
         // print after_gap
         write!(self.stdout, "{}", buffer.after_gap)?;
+
+        self.previous_required_lines = required_lines;
 
         self.stdout.queue(RestorePosition)?;
 
@@ -387,31 +454,32 @@ mod tests {
 
     #[test]
     fn handle_event_ctrl_d_returns_canceled() {
-        let mut input = LineInput::new();
+        let mut buffer = LineInput::new();
         let mut buffer = String::new();
         let event = Event::Key(KeyEvent::new(
             KeyCode::Char('d'),
             KeyModifiers::CONTROL,
         ));
-        let res = input.handle_event(&mut buffer, &event);
+        let res = buffer.handle_event(&mut buffer, &event);
         assert!(matches!(res, Response::Cancel));
         assert!(buffer.is_empty());
     }
 
     #[test]
     fn handle_event_enter_returns_accept() {
-        let expected = "This is some text.".to_owned();
-        let mut input = LineInput {
-            input: GapBuffer {
-                before_gap: expected[..8].to_owned(),
-                after_gap: expected[8..].to_owned(),
+        let buffer_text = "This is some text.";
+        let expected = format!("{buffer_text}{}", native_eol());
+        let mut buffer = LineInput {
+            buffer: GapBuffer {
+                before_gap: buffer_text[..8].to_owned(),
+                after_gap: buffer_text[8..].to_owned(),
                 cursor: 8,
             },
         };
         let mut buffer = String::new();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let res = input.handle_event(&mut buffer, &event);
+        let res = buffer.handle_event(&mut buffer, &event);
         assert!(
             matches!(res, Response::Accept(bytes) if bytes == expected.len())
         );
