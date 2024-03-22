@@ -1,10 +1,10 @@
-use line_input::LineInput;
-use line_input::LineRead;
+use line_reader::LineRead;
+use line_reader::LineReader;
 
 fn main() {
     let mut line = String::new();
-    let mut input = LineInput::new();
-    let res = input.read_line(&mut line, ":");
+    let mut reader = LineReader::new();
+    let res = reader.read_line(&mut line, ":");
     match res {
         Err(e) => eprintln!("{e}"),
         Ok(bytes_read) => {

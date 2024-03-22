@@ -1,8 +1,8 @@
 [workspace]
 
-members = [ "line_input",
+members = [
   "lned",
-"line_input",
+  "line_reader",
 ]
 
 resolver = "2"

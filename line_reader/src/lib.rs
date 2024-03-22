@@ -37,7 +37,7 @@ pub trait LineRead {
 }
 
 #[derive(Debug)]
-pub struct LineInput {
+pub struct LineReader {
     buffer: GapBuffer,
 }
 
@@ -79,19 +79,19 @@ pub fn native_eol() -> &'static str {
     }
 }
 
-// impls for LineInput
+// impls for LineReader
 ////////
 
-impl Default for LineInput {
+impl Default for LineReader {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl LineInput {
+impl LineReader {
     #[must_use]
-    pub fn new() -> LineInput {
-        LineInput { buffer: GapBuffer::new() }
+    pub fn new() -> LineReader {
+        LineReader { buffer: GapBuffer::new() }
     }
 
     fn accept_line(
@@ -108,7 +108,6 @@ impl LineInput {
         let mut render_ctx = RenderContext::new(prompt, &mut stdout);
         render_ctx.initialize()?;
 
-        // loop handling events until handle_event() returns a Reponse
         loop {
             render_ctx.repaint(&self.buffer)?;
 
@@ -116,10 +115,7 @@ impl LineInput {
             let event = event::read()?;
 
             // handle event
-            let response = match event {
-                Event::Key(event) => self.handle_key_event(event),
-                _ => Response::Continue,
-            };
+            let response = self.handle_event(&event);
 
             match response {
                 Response::Accept(bytes_read) => {
@@ -139,7 +135,14 @@ impl LineInput {
         }
     }
 
-    fn handle_key_event(&mut self, event: KeyEvent) -> Response {
+    fn handle_event(&mut self, event: &Event) -> Response {
+        match event {
+            Event::Key(event) => self.handle_key_event(event),
+            _ => Response::Continue,
+        }
+    }
+
+    fn handle_key_event(&mut self, event: &KeyEvent) -> Response {
         match event.code {
             KeyCode::Char('d') if event.modifiers == KeyModifiers::CONTROL => {
                 Response::Cancel
@@ -172,7 +175,7 @@ impl LineInput {
     }
 }
 
-impl LineRead for LineInput {
+impl LineRead for LineReader {
     fn read_line(
         &mut self,
         buffer: &mut String,
@@ -449,40 +452,36 @@ mod tests {
         assert_eq!(buf.after_gap, "buffer");
     }
 
-    // tests for LineInput
+    // tests for LineReader
     ////////
 
     #[test]
     fn handle_event_ctrl_d_returns_canceled() {
-        let mut buffer = LineInput::new();
-        let mut buffer = String::new();
+        let mut reader = LineReader::new();
         let event = Event::Key(KeyEvent::new(
             KeyCode::Char('d'),
             KeyModifiers::CONTROL,
         ));
-        let res = buffer.handle_event(&mut buffer, &event);
+        let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Cancel));
-        assert!(buffer.is_empty());
     }
 
     #[test]
     fn handle_event_enter_returns_accept() {
         let buffer_text = "This is some text.";
         let expected = format!("{buffer_text}{}", native_eol());
-        let mut buffer = LineInput {
+        let mut reader = LineReader {
             buffer: GapBuffer {
                 before_gap: buffer_text[..8].to_owned(),
                 after_gap: buffer_text[8..].to_owned(),
                 cursor: 8,
             },
         };
-        let mut buffer = String::new();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-        let res = buffer.handle_event(&mut buffer, &event);
+        let res = reader.handle_event(&event);
         assert!(
             matches!(res, Response::Accept(bytes) if bytes == expected.len())
         );
-        assert_eq!(buffer, expected);
     }
 }

@@ -354,7 +354,7 @@ impl EditBuffer {
 fn compute_default_eol(
     lines: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> &'static str {
-    let native_eol = line_input::native_eol();
+    let native_eol = line_reader::native_eol();
     let mut crlf = 0;
     let mut lf = 0;
 
@@ -482,7 +482,7 @@ mod tests {
     #[test]
     fn default_eol_when_equal_lf_crlf() {
         let lines = vec!["L1\n", "L2\r\n", "L3\r\n", "L4\n"];
-        assert_eq!(compute_default_eol(&lines), line_input::native_eol());
+        assert_eq!(compute_default_eol(&lines), line_reader::native_eol());
     }
 
     /////

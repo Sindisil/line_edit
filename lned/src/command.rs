@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use regex::Regex;
 use unicode_segmentation::UnicodeSegmentation;
 
-use line_input::LineRead;
+use line_reader::LineRead;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;

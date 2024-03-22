@@ -11,7 +11,7 @@ use crate::command::{self, Address, Cmd};
 use crate::edit_buffer::EditBuffer;
 use crate::num_utils::NumUtils;
 
-use line_input::LineRead;
+use line_reader::LineRead;
 
 #[derive(Debug)]
 pub enum Error {

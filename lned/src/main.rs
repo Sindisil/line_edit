@@ -11,7 +11,7 @@ use std::error::Error;
 use std::io;
 use std::iter;
 
-use line_input::LineInput;
+use line_reader::LineReader;
 
 fn main() {
     let args = match cli::parse_args(&mut io::stdout().lock(), wild::args_os())
@@ -25,7 +25,7 @@ fn main() {
     };
 
     if let Err(err) =
-        main_loop::run(LineInput::new(), io::stdout().lock(), &args)
+        main_loop::run(LineReader::new(), io::stdout().lock(), &args)
     {
         eprintln!("Error: {err}");
         if let Some(cause) = err.source() {
