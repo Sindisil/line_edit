@@ -152,7 +152,12 @@ impl LineReader {
                 todo!("move cursor right until next base char");
             }
             KeyCode::Backspace => {
-                todo!("remove code point to left of cursor, but cursor doesn't move unless iit has width > 0");
+                if let Some((prev_idx, _)) =
+                    self.buffer.before_gap.char_indices().next_back()
+                {
+                    self.buffer.before_gap.truncate(prev_idx);
+                }
+                Response::Continue
             }
             KeyCode::Delete => {
                 todo!("remove base char at cursor, along with any zero width code points to its right up until next base char");
@@ -484,6 +489,42 @@ mod tests {
         } else {
             panic!("response was not Accept");
         }
+        assert_eq!(reader.buffer.to_string(), expected);
+    }
+
+    #[test]
+    fn handle_event_backspace_removes_last_code_point() {
+        let buffer_text = "This is some text.";
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: buffer_text.to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(
+            reader.buffer.to_string(),
+            buffer_text[..buffer_text.len() - 1]
+        );
+    }
+
+    #[test]
+    fn handle_event_backspace_removes_only_one_code_point() {
+        let buffer_text = "Å";
+        let expected = "A";
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: buffer_text.to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
         assert_eq!(reader.buffer.to_string(), expected);
     }
 }
