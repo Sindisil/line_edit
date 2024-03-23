@@ -151,6 +151,12 @@ impl LineReader {
             KeyCode::Right => {
                 todo!("move cursor right until next base char");
             }
+            KeyCode::Home => {
+                todo!("move cursor to beginning of input");
+            }
+            KeyCode::End => {
+                todo!("move cursor to end of input");
+            }
             KeyCode::Backspace => {
                 if let Some((prev_idx, _)) =
                     self.buffer.before_gap.char_indices().next_back()
@@ -165,6 +171,12 @@ impl LineReader {
             KeyCode::Char(c) => {
                 self.buffer.before_gap.push(c);
                 Response::Continue
+            }
+            KeyCode::Up => {
+                todo!("move to next older entry in history");
+            }
+            KeyCode::Down => {
+                todo!("move to next newer entry in history");
             }
             _ => Response::Continue,
         }
