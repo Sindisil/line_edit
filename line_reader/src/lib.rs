@@ -9,7 +9,7 @@ use crossterm::event::{
 };
 use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{ExecutableCommand, QueueableCommand};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 // Public structs, enums, and traits
 ///////////
@@ -150,10 +150,36 @@ impl LineReader {
                 Response::Accept(bytes_read)
             }
             KeyCode::Left => {
-                todo!("move cursor left until previous base char");
+                if let Some((prev_idx, _)) = self
+                    .buffer
+                    .before_gap
+                    .char_indices()
+                    .rfind(|(_, c)| c.width().is_some_and(|w| w > 0))
+                {
+                    self.buffer
+                        .after_gap
+                        .insert_str(0, &self.buffer.before_gap[prev_idx..]);
+                    self.buffer.before_gap.truncate(prev_idx);
+                }
+                Response::Continue
             }
             KeyCode::Right => {
-                todo!("move cursor right until next base char");
+                if let Some((next_idx, _)) = self
+                    .buffer
+                    .after_gap
+                    .char_indices()
+                    .skip(1)
+                    .find(|(_, c)| c.width().is_some_and(|w| w > 0))
+                {
+                    self.buffer
+                        .before_gap
+                        .push_str(&self.buffer.after_gap[..next_idx]);
+                    self.buffer.after_gap.drain(..next_idx);
+                } else if !self.buffer.after_gap.is_empty() {
+                    self.buffer.before_gap.push_str(&self.buffer.after_gap);
+                    self.buffer.after_gap.clear();
+                }
+                Response::Continue
             }
             KeyCode::Home => {
                 todo!("move cursor to beginning of input");
@@ -386,6 +412,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::unicode_not_nfc)]
 mod tests {
     use super::*;
 
@@ -542,5 +569,97 @@ mod tests {
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
         assert_eq!(reader.buffer.to_string(), expected);
+    }
+
+    #[test]
+    fn left_arrow_moves_to_previous_base_char() {
+        let buffer_text = "dëf";
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: buffer_text.to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.before_gap, "dë");
+        assert_eq!(reader.buffer.after_gap, "f");
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.before_gap, "d");
+        assert_eq!(reader.buffer.after_gap, "ëf");
+    }
+
+    #[test]
+    fn left_arrow_at_beginning_does_nothing() {
+        let buffer_text = "dëf";
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                after_gap: buffer_text.to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.after_gap, buffer_text);
+        assert!(reader.buffer.before_gap.is_empty());
+    }
+
+    #[test]
+    fn right_arrow_moves_to_next_base_char() {
+        let buffer_text = "dëf";
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                after_gap: buffer_text.to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.before_gap, "d");
+        assert_eq!(reader.buffer.after_gap, "ëf");
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.buffer.before_gap, "dë");
+        assert_eq!(reader.buffer.after_gap, "f");
+    }
+
+    #[test]
+    fn right_arrow_moves_past_final_char() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "lm".to_owned(),
+                after_gap: "ñ".to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert!(reader.buffer.after_gap.is_empty());
+        assert_eq!(reader.buffer.before_gap, "lmñ");
+    }
+
+    #[test]
+    fn right_arrow_at_end_does_nothing() {
+        let mut reader = LineReader {
+            buffer: GapBuffer {
+                before_gap: "lmñ".to_owned(),
+                ..Default::default()
+            },
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert!(reader.buffer.after_gap.is_empty());
+        assert_eq!(reader.buffer.before_gap, "lmñ");
     }
 }
