@@ -1,4 +1,4 @@
-Overall Design
+# Overall Design
 
 Main data structure is a gap buffer. The gap is always at the current
 cursor position, since typing in text is assumed to be the most frequent
@@ -6,7 +6,7 @@ action.
 
 The gap is moved by navigation actions (Left, Right, Home, etc.).
 
-Repaint
+## Repaint
 
 Repaintng is done when:
 
@@ -54,3 +54,64 @@ by repainting less when possible. However, given how few characters are
 displayed on even a large termial window, and how small a portion the
 input editor would usually be displaying (most often only one line), it
 probably doesn't make sense to bother.
+
+## Edit states
+
+LineReader has several ReaderStates:
+
+    EditInput
+    ViewHistory
+    EditHistory
+    Accept
+
+When history search is added, it will probably result in another
+ReaderState (e.g., SearchHistory).
+
+### EditInput
+
+LineReader starts in this state. The input_buffer is displayed and
+manipulated in this state. Transitions out of this state are:
+
+#### EditInput
+
+In this state, the input_buffer is displayed and manipulated.
+
+[Enter] => Accept
+[Up] => ViewHistory
+[Esc] if previous state was EditHistory => EditHistory
+_ => EditInput
+
+#### ViewHistory
+
+In this state, a line from the line_history list is displayed. When
+transitioning into this state, the most recent (i.e., last) line of
+line_history is displayed.
+
+[Up] => ViewHistory (moves to next older line of history)
+[Down] if at end of line_history => EditInput
+[Down] => ViewHistory (move to next most recent line of history)
+[Esc] if previous state was EditInput => EditInput
+[Esc] if previous state was EditHistory => EditHistory
+[Enter] => Accept
+_ => EditHistory
+
+#### EditHistory
+
+When entering this state from ViewHistory, history_buffer is initialized
+from the currently displayed line in line_history. The contents and state
+persist until accepted or replaced by a subsequent transition from
+ViewHistory.
+
+[Up] => ViewHistory
+[Esc] => EditInput
+[Enter] => Accept
+_ => EditHistory
+
+#### Accept
+
+If non-empty, the currently displayed line (whether input_buffer,
+history_buffer, or an item in line_history) is pushed onto end of
+line_history and copied into output buffer. In future, might shrink
+one or both of the buffers if they're beyond some limit, as well, to
+optimize memory consumption.
+
