@@ -43,29 +43,7 @@ pub struct LineReader {
     bg_line_idx: Vec<usize>,
     ag_buf: String,
     ag_display_end: usize,
-}
 
-// Private structs and enums
-////////
-
-#[derive(Debug, Copy, Clone)]
-enum DisplayStart {
-    /// Prompt's terminal line
-    Prompt(u16),
-
-    /// Offset into buffer of beginning of terminal line 0
-    /// (index into `bg_buf`, lines skipped)
-    CharIndex(usize),
-}
-
-/// Values needed to render the buffer to the terminal window.
-///
-/// todo: Some of these may not be necessary (e.g., if they need to be
-/// recomputed every time the buffer is rendered) or may only be useful
-/// in the future (e.g., if we recompute them now, but perhaps update
-/// in response to events in the future as an optimization).
-#[derive(Debug)]
-struct RenderContext {
     /// Current terminal width
     terminal_columns: u16,
 
@@ -87,6 +65,15 @@ struct RenderContext {
     /// Lines to scroll up before rendering
     scroll_needed: u16,
 }
+
+// Private structs and enums
+////////
+
+/// Struct used to handle enabling `raw_mode`, and more importantly,
+/// who's Drop ensures exiting `raw_mode` and that the cursor doesn't
+/// remain hidden in the case of error exit.
+#[derive(Debug)]
+struct RenderContext;
 
 #[derive(Debug)]
 enum Response {
@@ -113,14 +100,7 @@ pub fn native_eol() -> &'static str {
 impl LineReader {
     #[must_use]
     pub fn new() -> LineReader {
-        LineReader {
-            prompt_len: 0,
-            prompt_width: 0,
-            bg_buf: String::new(),
-            bg_line_idx: Vec::new(),
-            ag_buf: String::new(),
-            ag_display_end: 0,
-        }
+        LineReader { ..Default::default() }
     }
 
     #[cfg(not(tarpaulin_include))]
@@ -131,7 +111,8 @@ impl LineReader {
         output_buffer: &mut String,
     ) -> io::Result<Option<usize>> {
         // Get the initial display dimensions
-        let (term_cols, term_lines) = terminal::size()?;
+        (self.terminal_columns, self.terminal_lines) = terminal::size()?;
+        let (_, initial_cursor_line) = cursor::position()?;
 
         // initialize gap buffer
         self.bg_buf += prompt;
@@ -147,7 +128,7 @@ impl LineReader {
             for (i, c) in self.bg_buf.char_indices() {
                 let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
                 col += w;
-                if col > term_cols {
+                if col > self.terminal_columns {
                     line += 1;
                     col = w;
                     self.bg_line_idx[line] = i;
@@ -157,18 +138,39 @@ impl LineReader {
             self.bg_line_idx.clear();
         }
 
-        // Initialize render context
-        let (_, initial_cursor_line) = cursor::position()?;
-        let mut render_ctx = RenderContext::new(
-            self,
-            term_cols,
-            term_lines,
-            initial_cursor_line,
-        );
+        // convert some values to usize for convenience
+        let terminal_lines = usize::from(self.terminal_lines);
+        let cursor_line = usize::from(initial_cursor_line);
+
+// Initialize rendering related values
+        let last_buffer_line_idx =
+            self.bg_line_idx.last().copied().unwrap_or(0);
+        self.cursor_column =
+            u16::try_from(self.bg_buf[last_buffer_line_idx..].width()).unwrap();
+        let mut new_cursor_line = cursor_line + self.bg_line_idx.len();
+        if self.cursor_column == self.terminal_columns {
+            new_cursor_line += 1;
+            self.cursor_column = 0;
+        }
+        self.cursor_line = new_cursor_line.try_into().unwrap();
+
+        (self.first_display_line, self.first_buffer_line, self.scroll_needed) =
+            if new_cursor_line > terminal_lines {
+                let overrun = new_cursor_line - terminal_lines + 1;
+                let lines_left = terminal_lines - cursor_line - 1;
+                let scroll_needed =
+                    u16::try_from(cmp::min(overrun, lines_left)).unwrap();
+                let first_display_line = cursor_line.saturating_sub(overrun);
+                (first_display_line.try_into().unwrap(), overrun, scroll_needed)
+            } else {
+                (cursor_line.try_into().unwrap(), 0, 0)
+            };
+
+        let _render_ctx = RenderContext::new();
         terminal::enable_raw_mode()?;
 
         loop {
-            self.repaint(&mut render_ctx)?;
+            self.repaint()?;
             // get next event
             let event = event::read()?;
 
@@ -179,7 +181,7 @@ impl LineReader {
                 Response::Accept => {
                     let bytes_read =
                         self.bg_buf.len() - prompt.len() + self.ag_buf.len();
-                    self.move_to_end(&mut render_ctx)?;
+                    self.move_to_end()?;
                     *output_buffer += &self.bg_buf[prompt.len()..];
                     *output_buffer += &self.ag_buf;
                     self.bg_buf.clear();
@@ -298,16 +300,13 @@ impl LineReader {
 
     /// Move gap (insertion point) to beginning of buffer
     #[cfg(not(tarpaulin_include))]
-    fn move_to_end(
-        &mut self,
-        render_ctx: &mut RenderContext,
-    ) -> io::Result<()> {
+    fn move_to_end(&mut self) -> io::Result<()> {
         let (mut cur_col, mut cur_line) = cursor::position()?;
         let ag_buf_width = self.ag_buf.width();
 
         let mut stdout = io::stdout().lock();
-        let term_height = render_ctx.terminal_lines as usize;
-        let last_line = ag_buf_width / usize::from(render_ctx.terminal_columns)
+        let term_height = usize::from(self.terminal_lines);
+        let last_line = ag_buf_width / usize::from(self.terminal_columns)
             + usize::from(cur_line);
         let new_cursor_line = last_line + 1;
         if new_cursor_line >= term_height {
@@ -326,8 +325,7 @@ impl LineReader {
                 .queue(MoveTo(cur_col, cur_line))?
                 .queue(Clear(ClearType::FromCursorDown))?;
             let offset = ag_buf_width.saturating_sub(
-                ((render_ctx.terminal_lines - 1) * render_ctx.terminal_columns)
-                    as usize,
+                ((self.terminal_lines - 1) * self.terminal_columns) as usize,
             );
             write!(stdout, "{}", &self.ag_buf[offset..])?;
         }
@@ -337,27 +335,27 @@ impl LineReader {
 
     #[cfg(not(tarpaulin_include))]
     /// render current buffer to display
-    fn repaint(&mut self, render_ctx: &mut RenderContext) -> io::Result<()> {
+    fn repaint(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout().lock();
 
         stdout.queue(Hide)?;
 
-        if render_ctx.scroll_needed > 0 {
-            stdout.queue(ScrollUp(render_ctx.scroll_needed))?;
+        if self.scroll_needed > 0 {
+            stdout.queue(ScrollUp(self.scroll_needed))?;
         }
 
         stdout
-            .queue(MoveTo(0, render_ctx.first_display_line))?
+            .queue(MoveTo(0, self.first_display_line))?
             .queue(Clear(ClearType::FromCursorDown))?
             .write_all(
-                self.bg_buf[self.bg_line_idx[render_ctx.first_buffer_line]..]
+                self.bg_buf[self.bg_line_idx[self.first_buffer_line]..]
                     .as_bytes(),
             )?;
         if !self.ag_buf.is_empty() {
             stdout.write_all(self.ag_buf[0..self.ag_display_end].as_bytes())?;
         }
         stdout
-            .queue(MoveTo(render_ctx.cursor_column, render_ctx.cursor_line))?
+            .queue(MoveTo(self.cursor_column, self.cursor_line))?
             .queue(Show)?
             .flush()
     }
@@ -386,63 +384,53 @@ impl LineRead for LineReader {
 ////////
 
 impl RenderContext {
-    fn new(
-        reader: &LineReader,
-        terminal_columns: u16,
-        terminal_lines: u16,
-        cursor_line: u16,
-    ) -> RenderContext {
-        // convert some values to usize for convenience
-        let terminal_lines = usize::from(terminal_lines);
-        let cursor_line = usize::from(cursor_line);
-
-        let last_buffer_line_idx =
-            reader.bg_line_idx.last().copied().unwrap_or(0);
-        let mut new_cursor_column =
-            u16::try_from(reader.bg_buf[last_buffer_line_idx..].width())
-                .unwrap();
-        let mut new_cursor_line = cursor_line + reader.bg_line_idx.len();
-        if new_cursor_column == terminal_columns {
-            new_cursor_line += 1;
-            new_cursor_column = 0;
-        }
-
-        let (first_display_line, first_buffer_line, scroll_needed) =
-            if new_cursor_line > terminal_lines {
-                let overrun = new_cursor_line - terminal_lines + 1;
-                let lines_left = terminal_lines - cursor_line - 1;
-                let scroll_needed =
-                    u16::try_from(cmp::min(overrun, lines_left)).unwrap();
-                let first_display_line = cursor_line.saturating_sub(overrun);
-                (first_display_line, overrun, scroll_needed)
-            } else {
-                (cursor_line, 0, 0)
-            };
-
-        RenderContext {
-            terminal_columns,
-            terminal_lines: terminal_lines.try_into().unwrap(),
-            cursor_column: new_cursor_column,
-            cursor_line: new_cursor_line.try_into().unwrap(),
-            first_display_line: first_display_line.try_into().unwrap(),
-            first_buffer_line,
-            scroll_needed,
-        }
+    fn new() -> RenderContext {
+        RenderContext {}
     }
 
-    fn display_space(&self, s: &str) -> (u16, u16) {
-        let mut cols = 0;
-        let mut lines = 0;
-        for c in s.chars() {
-            let w = u16::try_from(c.width().unwrap_or(0)).unwrap();
-            cols += w;
-            if cols >= self.terminal_columns {
-                lines += 1;
-                cols = w;
-            }
-        }
-        (lines, cols)
-    }
+    //    fn old_new(
+    //        reader: &LineReader,
+    //        terminal_columns: u16,
+    //        terminal_lines: u16,
+    //        cursor_line: u16,
+    //    ) -> RenderContext {
+    //        // convert some values to usize for convenience
+    //        let terminal_lines = usize::from(terminal_lines);
+    //        let cursor_line = usize::from(cursor_line);
+    //
+    //        let last_buffer_line_idx =
+    //            reader.bg_line_idx.last().copied().unwrap_or(0);
+    //        let mut new_cursor_column =
+    //            u16::try_from(reader.bg_buf[last_buffer_line_idx..].width())
+    //                .unwrap();
+    //        let mut new_cursor_line = cursor_line + reader.bg_line_idx.len();
+    //        if new_cursor_column == terminal_columns {
+    //            new_cursor_line += 1;
+    //            new_cursor_column = 0;
+    //        }
+    //
+    //        let (first_display_line, first_buffer_line, scroll_needed) =
+    //            if new_cursor_line > terminal_lines {
+    //                let overrun = new_cursor_line - terminal_lines + 1;
+    //                let lines_left = terminal_lines - cursor_line - 1;
+    //                let scroll_needed =
+    //                    u16::try_from(cmp::min(overrun, lines_left)).unwrap();
+    //                let first_display_line = cursor_line.saturating_sub(overrun);
+    //                (first_display_line, overrun, scroll_needed)
+    //            } else {
+    //                (cursor_line, 0, 0)
+    //            };
+    //
+    //        RenderContext {
+    //            terminal_columns,
+    //            terminal_lines: terminal_lines.try_into().unwrap(),
+    //            cursor_column: new_cursor_column,
+    //            cursor_line: new_cursor_line.try_into().unwrap(),
+    //            first_display_line: first_display_line.try_into().unwrap(),
+    //            first_buffer_line,
+    //            scroll_needed,
+    //        }
+    //    }
 }
 
 impl Drop for RenderContext {
