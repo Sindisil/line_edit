@@ -167,27 +167,44 @@ actual I/O untested.
         
 ### Test cases
 I.  Char(c)
-    A.  Insertion sizes
+    A.  Insertion widths
         1.  0w (e.g., combining mark u0308 '̈¨')
         2.  1w (e.g., the letter 'a')
         3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
     B.  Test cases
-        1.  Insertion of each size works as expected in base case
+        1.  Insertion of each width works as expected in base case
             a.  char_typed_non_0w_inserts
             b.  char_typed_0w_requires_base_char
                 0w as first character doesn't insert
             c.  char_typed_beore_eol_moves_cursor_char_width
-        2.  char_typed_to_eol_before_bottom_wraps_cursor_to_0
-            Insertion of each size that fills line to last column wraps
+        2.  Insertion of each size that fills line to last column wraps
             cursor to column zero of next line.
-        3.  char_typed_past_eol_before_bottom_wraps_cursor_to_1
-            Insertion that won't fit line wraps character to start of next
+            a.  char_typed_to_eol_before_bottom_wraps_cursor_to_0
+        3.  Insertion that won't fit line wraps character to start of next
             line and moves cursor to first colum after character.
+            a.  char_typed_past_eol_before_bottom_wraps_cursor_to_1
         4.  Insertion that puts cursor below viewport causes display
             start to adjust to keep cursor on last line of viewport,
             scrolling up as necessary.
             a.  char_typed_to_bottom_when_bg_fits_pans_display
             b.  char_typed_to_bottom_when_bg_overflows_pans_buffer    
         5.  char_typed_ag_display_only_to_display_end
-        
-
+II. Backspace
+    A.  Removed widths
+        1.  0w (e.g., combining mark u0308 '̈¨')
+        2.  1w (e.g., the letter 'a')
+        3.  2w (e.g., the guitar symbol u1f3b8 '🎸')
+    B.  Test cases
+        1.  Backspace over each width works as expected in base case
+            a.  backspace_removes_only_last_char_before_cursor
+            b.  backspace_ahead_of_first_char_moves_cursor_char_width
+        2.  Backspacing over the char in column 0 leaves cursor in
+            colum 0 if previous character fits to previous EOL, or
+            wraps to end of previous line if last character of
+            previous display line doesn't fill last column.
+            a.  backspace_over_first_char_below_top_wraps_cursor_if_room
+        3.  Backspacing that results in the cursor moving above the
+            first line of the viewport causes display start to adjust
+            to keep the cursor on the first line of the viewport.
+            a.  backspace_past_top_pans_buffer
+            b.  backspace_eliminating_ag_overflow_only_pans_if_past_top
