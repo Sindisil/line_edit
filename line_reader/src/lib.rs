@@ -264,11 +264,7 @@ impl LineReader {
                 Response::Continue
             }
             KeyCode::Backspace => {
-                if let Some((prev_idx, _)) =
-                    self.bg_buf[self.prompt_len..].char_indices().next_back()
-                {
-                    self.bg_buf.truncate(prev_idx);
-                }
+                self.handle_backspace();
                 Response::Continue
             }
             KeyCode::Delete => {
@@ -300,7 +296,10 @@ impl LineReader {
 
     fn handle_char_typed(&mut self, c: char) {
         let c_width = c.width().unwrap_or(0);
+
+        // handle zero width (combining) characters
         if c_width == 0 {
+            // zero width char only valid if not the first character
             if self.bg_buf.len() > self.prompt_len {
                 self.bg_buf.push(c);
             }
@@ -314,19 +313,23 @@ impl LineReader {
         self.cursor_column += c_width;
 
         match self.cursor_column.cmp(&self.display_columns) {
+            // typec character overflows cursor line
             Ordering::Greater => {
                 self.cursor_column = c_width;
                 self.cursor_line += 1;
                 self.bg_line_idx.push(new_char_idx);
             }
+            // typed character exactly fills cursor line
             Ordering::Equal => {
                 self.cursor_column = 0;
                 self.cursor_line += 1;
-                self.bg_line_idx.push(self.bg_buf.len());
+                self.bg_line_idx.push(self.bg_buf.chars().count());
             }
+            // typed character fits on cursor line
             Ordering::Less => (),
         }
 
+        // handle cursor moving below viewport bottom
         if self.cursor_line > self.viewport_bottom() {
             self.cursor_line -= 1;
             if self.first_buffer_line == 0 {
@@ -343,6 +346,50 @@ impl LineReader {
         self.ag_display_chars = self.display_remainder();
     }
 
+    fn handle_backspace(&mut self) {
+        if let Some((i, c)) = self.bg_buf.char_indices().next_back() {
+            // if no input chars, we're done
+            if i < self.prompt_len {
+                return;
+            }
+            self.bg_buf.truncate(i);
+            let c_width = u16::try_from(c.width().unwrap_or(0)).unwrap();
+            let prev_cursor_line = self.cursor_line;
+
+            if self.cursor_column == 0 {
+                // backspacing from column 0, wrap to position of
+                // removed char on preceding line.
+                self.cursor_column = self.display_columns - c_width;
+                self.cursor_line -= 1;
+            } else {
+                self.cursor_column -= c_width;
+
+                if self.cursor_column == 0 {
+                    // backspacing to column 0 - check if room to wrap
+                    // to end of preceding line
+                    if let Some(&prev_idx) = self.bg_line_idx.iter().nth_back(1)
+                    {
+                        let prev_w =
+                            u16::try_from(self.bg_buf[prev_idx..].width())
+                                .unwrap();
+                        if prev_w < self.display_columns {
+                            self.cursor_column = prev_w;
+                            self.cursor_line -= 1;
+                        }
+                    }
+                }
+            }
+
+            if prev_cursor_line != self.cursor_line {
+                self.bg_line_idx.truncate(self.bg_line_idx.len() - 1);
+                if self.cursor_line < self.viewport_top() {
+                    self.cursor_line += 1;
+                    self.first_buffer_line -= 1;
+                }
+            }
+        }
+    }
+
     /// Compute last line of viewport
     fn viewport_bottom(&self) -> u16 {
         if self.ag_buf.width()
@@ -352,6 +399,11 @@ impl LineReader {
         } else {
             self.display_lines - 2
         }
+    }
+
+    /// Compute first line of viewport
+    fn viewport_top(&self) -> u16 {
+        (self.first_buffer_line > 0).into()
     }
 
     /// Compute portion of `ag_buf` that fits in display
@@ -477,7 +529,7 @@ impl Default for LineReader {
             display_columns: 80,
             display_lines: 24,
             cursor_column: 0,
-            cursor_line: 0,
+            cursor_line: 23,
             first_display_line: 23,
             first_buffer_line: 0,
             ag_display_chars: 0,
@@ -595,31 +647,197 @@ mod tests {
     }
 
     #[test]
-    fn handle_event_backspace_removes_last_code_point() {
-        let buffer_text = "This is some text.";
-        let mut reader =
-            LineReader { bg_buf: buffer_text.to_owned(), ..Default::default() };
+    fn backspace_removes_only_last_input_char_before_gap() {
+        let mut reader = LineReader::new();
+        reader.bg_buf.push_str(":ë̱🎸");
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.cursor_column = 4;
+
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // 2w
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(
-            reader.bg_buf.to_string(),
-            buffer_text[..buffer_text.len() - 1]
-        );
+        assert_eq!(&reader.bg_buf, ":ë̱");
+
+        // 1st 0w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":ë");
+
+        // 2nd 0w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":e");
+
+        // 1w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":");
+
+        // prompt
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":");
     }
 
     #[test]
-    fn handle_event_backspace_removes_only_one_code_point() {
-        let buffer_text = "2⁵";
-        let expected = "2";
-        let mut reader =
-            LineReader { bg_buf: buffer_text.to_owned(), ..Default::default() };
+    fn backspace_moves_cursor_back_removed_char_width() {
+        let mut reader = LineReader::new();
+        reader.bg_buf.push_str(":ë̱🎸");
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.cursor_column = 4;
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        // 2w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 2);
+
+        // 1st 0w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 2);
+
+        // 2nd 0w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 2);
+
+        // 1w
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 1);
+
+        // prompt
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 1);
+
+        // on second line when first line doesn't fill full width
+        let mut reader = LineReader::new();
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.display_columns = 20;
+        reader.display_lines = 10;
+        reader.bg_buf.push_str(":123456789012345678🎸🎸");
+        reader.bg_line_idx = vec![0, 20];
+        reader.first_display_line = 8;
+        reader.cursor_line = 9;
+        reader.cursor_column = 4;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(reader.bg_buf, expected);
+        assert_eq!(&reader.bg_buf, ":123456789012345678🎸");
+        assert_eq!(reader.cursor_column, 2);
+        assert_eq!(reader.cursor_line, 9);
+    }
+
+    #[test]
+    fn backspace_at_column_0_wraps_cursor_to_preceding_line() {
+        let mut reader = LineReader::new();
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.display_columns = 20;
+        reader.display_lines = 10;
+        reader.bg_buf.push_str(":1234567890123456789");
+        reader.bg_line_idx = vec![0, 20];
+        reader.first_display_line = 8;
+        reader.cursor_line = 9;
+        reader.cursor_column = 0;
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":123456789012345678");
+        assert_eq!(reader.cursor_column, 19);
+        assert_eq!(reader.cursor_line, 8);
+        assert_eq!(reader.first_display_line, 8);
+        assert_eq!(reader.bg_line_idx, vec![0]);
+    }
+
+    #[test]
+    fn backspace_to_column_0_wraps_cursor_if_room() {
+        // room on preceding line
+        let mut reader = LineReader::new();
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.display_columns = 20;
+        reader.display_lines = 10;
+        reader.bg_buf.push_str(":123456789012345678🎸");
+        reader.bg_line_idx = vec![0, 20];
+        reader.first_display_line = 8;
+        reader.cursor_line = 9;
+        reader.cursor_column = 2;
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":123456789012345678");
+        assert_eq!(reader.cursor_column, 19);
+        assert_eq!(reader.cursor_line, 8);
+        assert_eq!(reader.first_display_line, 8);
+        assert_eq!(reader.bg_line_idx, vec![0]);
+
+        // no room on preceding line
+        let mut reader = LineReader::new();
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.display_columns = 20;
+        reader.display_lines = 10;
+        reader.bg_buf.push_str(":1234567890123456789🎸");
+        reader.bg_line_idx = vec![0, 20];
+        reader.first_display_line = 8;
+        reader.cursor_line = 9;
+        reader.cursor_column = 2;
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(&reader.bg_buf, ":1234567890123456789");
+        assert_eq!(reader.cursor_column, 0);
+        assert_eq!(reader.cursor_line, 9);
+        assert_eq!(reader.first_display_line, 8);
+        assert_eq!(reader.bg_line_idx, vec![0, 20]);
+    }
+
+    #[test]
+    fn backspace_moving_cursor_past_top_pans_buffer() {
+        let lines = [
+            ":1234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+        ];
+
+        let mut reader = LineReader::new();
+        reader.display_columns = 20;
+        reader.display_lines = 5;
+        reader.bg_buf.push_str(&lines.join(""));
+        reader.bg_line_idx = vec![0, 20, 40, 60, 80];
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.cursor_column = 0;
+        reader.cursor_line = 1;
+        reader.first_display_line = 0;
+        reader.first_buffer_line = 4;
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(matches!(res, Response::Continue));
+        assert_eq!(reader.cursor_column, 19);
+        assert_eq!(reader.cursor_line, 1);
+        assert_eq!(reader.first_display_line, 0);
+        assert_eq!(reader.first_buffer_line, 3);
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60,]);
     }
 
     #[test]
@@ -869,7 +1087,7 @@ mod tests {
         ));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 0));
+        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 23));
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
@@ -887,74 +1105,73 @@ mod tests {
     #[test]
     fn char_typed_to_eol_before_bottom_wraps_cursor_to_column_0() {
         let mut reader = LineReader::new();
-        reader.bg_buf.push(':');
+        reader.display_columns = 10;
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.display_columns = 20;
-        reader.bg_buf.push_str(":123456789012345678");
-        reader.cursor_column = 18;
+        reader.bg_buf.push_str(":1234567");
+        reader.cursor_column = 8;
         reader.cursor_line = 0;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
         assert_eq!((reader.cursor_column, reader.cursor_line), (0, 1));
+        assert_eq!(reader.bg_line_idx, vec![0, 9]);
     }
 
     #[test]
     fn char_typed_past_eol_before_bottom_wraps_cursor_to_after_char() {
         let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":1234567890123456789");
+        reader.display_columns = 10;
+        reader.bg_buf.push_str(":12345678");
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.cursor_column = 19;
+        reader.cursor_column = 9;
         reader.cursor_line = 0;
-        reader.display_columns = 20;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":1234567890123456789🎸");
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 1));
+        assert_eq!(reader.bg_line_idx, vec![0, 9]);
     }
 
     #[test]
     fn char_typed_to_bottom_when_bg_fits_pans_display() {
         // ag_buf.is_empty(), so viewport == display
         let mut reader = LineReader::new();
+        reader.display_columns = 20;
+        reader.display_lines = 5;
         reader.bg_buf.push_str(":123456789012345678");
         reader.prompt_len = 1;
         reader.prompt_width = 1;
         reader.cursor_column = 19;
         reader.cursor_line = 4;
         reader.first_display_line = 4;
-        reader.display_columns = 20;
-        reader.display_lines = 5;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":123456789012345678🎸");
+        assert_eq!(reader.bg_line_idx, vec![0, 19]);
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 4));
         assert_eq!(reader.first_display_line, 3);
         assert_eq!(reader.scroll_needed, 1);
 
         // ag_buf.width() past bottom of display, so viewport == display - 1
         let mut reader = LineReader::new();
+        reader.display_columns = 20;
+        reader.display_lines = 5;
         reader.bg_buf.push_str(":123456789012345678");
         reader.prompt_len = 1;
         reader.prompt_width = 1;
         reader.cursor_column = 19;
         reader.cursor_line = 3;
         reader.first_display_line = 3;
-        reader.display_columns = 20;
-        reader.display_lines = 5;
         reader.ag_buf.push_str("123456789012345678901234567890123456789");
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":123456789012345678🎸");
         assert_eq!((reader.cursor_column, reader.cursor_line), (2, 3));
         assert_eq!(reader.first_display_line, 2);
         assert_eq!(reader.scroll_needed, 1);
@@ -963,70 +1180,87 @@ mod tests {
     #[test]
     fn char_typed_to_bottom_when_bg_overflows_pans_buffer() {
         // ag_buf.is_empty(), so viewport == display
+        let lines = [
+            ":1234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "012345678901234567",
+        ];
+
         let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678");
-        reader.bg_line_idx = vec![0, 20];
+        reader.display_columns = 20;
+        reader.display_lines = 5;
+        reader.bg_buf.push_str(&lines.join(""));
+        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
         reader.prompt_len = 1;
         reader.prompt_width = 1;
-        reader.cursor_column = 19;
+        reader.cursor_column = 18;
         reader.cursor_line = 4;
         reader.first_display_line = 0;
         reader.first_buffer_line = 1;
-        reader.display_columns = 20;
-        reader.display_lines = 5;
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678🎸");
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 4));
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
+        assert_eq!((reader.cursor_column, reader.cursor_line), (0, 4));
         assert_eq!(reader.first_display_line, 0);
         assert_eq!(reader.first_buffer_line, 2);
         assert_eq!(reader.scroll_needed, 0);
 
         // ag_buf.width() past bottom of display, so viewport == display - 1
         let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678");
-        reader.bg_line_idx = vec![0, 20];
-        reader.prompt_len = 1;
-        reader.prompt_width = 1;
-        reader.cursor_column = 19;
-        reader.cursor_line = 3;
-        reader.first_display_line = 0;
-        reader.first_buffer_line = 1;
         reader.display_columns = 20;
         reader.display_lines = 5;
+        reader.bg_buf.push_str(&lines.join(""));
+        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
+        reader.prompt_len = 1;
+        reader.prompt_width = 1;
+        reader.cursor_column = 18;
+        reader.cursor_line = 3;
+        reader.first_display_line = 0;
+        reader.first_buffer_line = 2;
         reader.ag_buf.push_str("123456789012345678901234567890123456789");
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678🎸");
-        assert_eq!((reader.cursor_column, reader.cursor_line), (2, 3));
+        assert_eq!(reader.bg_line_idx, vec![0, 20, 40, 60, 80, 100, 119]);
+        assert_eq!((reader.cursor_column, reader.cursor_line), (0, 3));
         assert_eq!(reader.first_display_line, 0);
-        assert_eq!(reader.first_buffer_line, 2);
+        assert_eq!(reader.first_buffer_line, 3);
         assert_eq!(reader.scroll_needed, 0);
     }
 
     #[test]
     fn char_typed_when_ag_overflows_stops_at_display_remainder() {
+        let lines = [
+            ":1234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "01234567890123456789",
+            "012345678901234568",
+        ];
+
         let mut reader = LineReader::new();
-        reader.bg_buf.push_str(":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678");
-        reader.bg_line_idx = vec![0, 20];
+        reader.display_columns = 20;
+        reader.display_lines = 5;
+        reader.bg_buf.push_str(&lines.join(""));
+        reader.bg_line_idx = vec![0, 20, 40, 60, 80, 100];
         reader.prompt_len = 1;
         reader.prompt_width = 1;
         reader.cursor_column = 19;
         reader.cursor_line = 3;
         reader.first_display_line = 0;
         reader.first_buffer_line = 1;
-        reader.display_columns = 20;
-        reader.display_lines = 5;
         reader.ag_buf.push_str("123456789012345678901234567890123456789");
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(matches!(res, Response::Continue));
-        assert_eq!(&reader.bg_buf, ":12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678🎸");
         assert_eq!(reader.ag_display_chars, 38);
     }
 }
