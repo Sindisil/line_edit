@@ -183,12 +183,14 @@ I. Char(c)
         3.  Insertion that won't fit line wraps character to start of next
             line and moves cursor to first colum after character.
             a.  char_typed_past_eol_before_bottom_wraps_cursor_to_1
-        4.  Insertion that puts cursor below viewport causes display
+        4.  Insertion that pushes next 2w char to next line wraps cursor.
+            a.  char_typed_cursor_follows_next_char
+        5.  Insertion that puts cursor below viewport causes display
             start to adjust to keep cursor on last line of viewport,
             scrolling up as necessary.
             a.  char_typed_to_bottom_when_bg_fits_pans_display
             b.  char_typed_to_bottom_when_bg_overflows_pans_buffer    
-        5.  char_typed_ag_display_only_to_display_end
+        6.  char_typed_ag_display_only_to_display_end
 II. Backspace
     A. Removed widths
         1.  0w (e.g., combining mark u0308 '̈¨')
@@ -248,7 +250,8 @@ V. Delete
     B. Test cases
         1.  Delete removes first character after gap
         2.  Delete when no characters after gap does nothing
-        3.  Delete adjusts number of characters displayed after gap
+        3.  Delete moves cursor to previous line if prev line wasn't full
+            and char after deleted char fits.
 VI. Home
     A. Test cases
         1.  Home moves all input characters before gap to after gap.
