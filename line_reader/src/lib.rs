@@ -107,7 +107,7 @@ impl LineReader {
         (self.display_width, self.display_lines) = terminal::size()?;
         let (_, initial_cursor_line) = cursor::position()?;
 
-        // initialize gap buffer
+        // initialize gap bufferwith prompt
         self.bg_buf += prompt;
         self.prompt_width = prompt.width();
         self.prompt_len = prompt.len();
@@ -125,13 +125,13 @@ impl LineReader {
                 }
             }
         }
-
         self.penultimate_width = self
             .bg_line_idx
             .iter()
             .nth_back(1)
             .map(|i| self.bg_buf[*i..].width())
             .map(|w| u16::try_from(w).unwrap());
+
         // convert some values to usize for convenience
         let display_lines = usize::from(self.display_lines);
         let cursor_line = usize::from(initial_cursor_line);
@@ -197,21 +197,7 @@ impl LineReader {
                 ControlFlow::Break(())
             }
             KeyCode::Left => self.handle_left(),
-            KeyCode::Right => {
-                if let Some((next_idx, _)) = self
-                    .ag_buf
-                    .char_indices()
-                    .skip(1)
-                    .find(|(_, c)| c.width().is_some_and(|w| w > 0))
-                {
-                    self.bg_buf.push_str(&self.ag_buf[..next_idx]);
-                    self.ag_buf.drain(..next_idx);
-                } else if !self.ag_buf.is_empty() {
-                    self.bg_buf.push_str(&self.ag_buf);
-                    self.ag_buf.clear();
-                }
-                ControlFlow::Continue(())
-            }
+            KeyCode::Right => self.handle_right(),
             KeyCode::Home => {
                 self.ag_buf.insert_str(
                     0,
@@ -406,6 +392,48 @@ impl LineReader {
         ControlFlow::Continue(())
     }
 
+    fn handle_right(&mut self) -> ControlFlow<()> {
+        let skipped_width = {
+            let skipped_chars = if let Some((next_idx, _)) = self
+                .ag_buf
+                .char_indices()
+                .skip(1)
+                .map(|(i, c)| (i, c.width()))
+                .find(|(_, w)| w.is_some_and(|w| w > 0))
+            {
+                self.ag_buf.drain(..next_idx)
+            } else {
+                self.ag_buf.drain(..)
+            };
+            self.bg_buf.push_str(skipped_chars.as_str());
+            u16::try_from(skipped_chars.as_str().width()).unwrap()
+        };
+        let space_left = self.display_width - self.cursor_column;
+        self.cursor_column += skipped_width;
+        if space_left <= skipped_width {
+            self.bg_line_idx.push(self.bg_buf.len());
+            self.penultimate_width = Some(self.cursor_column);
+            self.cursor_line += 1;
+            self.cursor_column = 0;
+        }
+
+        // handle cursor moving below viewport bottom
+        if self.cursor_line > self.viewport_bottom() {
+            self.cursor_line -= 1;
+            if self.first_buffer_line == 0 {
+                self.scroll_needed = 1;
+            }
+            if self.first_display_line == 0 {
+                self.first_buffer_line += 1;
+            } else {
+                self.first_display_line =
+                    self.first_display_line.saturating_sub(1);
+            }
+        }
+
+        ControlFlow::Continue(())
+    }
+
     fn handle_delete(&mut self) -> ControlFlow<()> {
         if let Some((next_idx, next_width)) = self
             .ag_buf
@@ -511,6 +539,7 @@ impl LineReader {
         stdout.flush()
     }
 
+    #[cfg(not(tarpaulin_include))]
     /// render current buffer to display
     fn repaint(&mut self) -> io::Result<()> {
         let mut stdout = io::stdout().lock();
@@ -1003,7 +1032,7 @@ mod tests {
     }
 
     #[test]
-    fn right_arrow_moves_to_next_base_char() {
+    fn right_moves_to_next_base_char() {
         let buffer_text = "dëf";
         let mut reader =
             LineReader { ag_buf: buffer_text.to_owned(), ..Default::default() };
@@ -1020,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn right_arrow_moves_past_final_char() {
+    fn right_moves_past_final_char() {
         let mut reader = LineReader {
             bg_buf: "lm".to_owned(),
             ag_buf: "ñ".to_owned(),
@@ -1035,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn right_arrow_at_end_does_nothing() {
+    fn right_at_end_does_nothing() {
         let mut reader =
             LineReader { bg_buf: "lmñ".to_owned(), ..Default::default() };
         let event =
@@ -1044,6 +1073,129 @@ mod tests {
         assert!(res.is_continue());
         assert!(reader.ag_buf.is_empty());
         assert_eq!(reader.bg_buf, "lmñ");
+    }
+
+    #[test]
+    fn right_moves_cursor_forward_base_char_width() {
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            bg_line_idx: vec![0],
+            ag_buf: "aë🎸i".to_owned(),
+            first_display_line: 0,
+            cursor_line: 0,
+            cursor_column: 1,
+            ..Default::default()
+        };
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 2);
+
+        // right over 1w char including 0w combining char
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 3);
+
+        // right over 2w char
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_column, 5);
+    }
+
+    #[test]
+    fn right_from_line_end_wraps_cursor() {
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":12345678".to_owned(),
+            ag_buf: "9abcdef".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            first_display_line: 0,
+            cursor_line: 0,
+            cursor_column: 9,
+            ..Default::default()
+        };
+
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 1, "cursor_line");
+        assert_eq!(reader.cursor_column, 0, "cursor_column");
+        assert_eq!(reader.bg_line_idx, [0, 10]);
+        assert_eq!(reader.penultimate_width, Some(10));
+    }
+
+    #[test]
+    fn right_to_bottom_when_bg_fits_pans_display() {
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: ":12345678".to_owned(),
+            prompt_width: 1,
+            prompt_len: 1,
+            bg_line_idx: vec![0],
+            ag_buf: "abcdefghijABCDEFGHIJ".to_owned(),
+            first_display_line: 3,
+            penultimate_width: None,
+            cursor_line: 3,
+            cursor_column: 9,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 3, "cursor_line");
+        assert_eq!(reader.cursor_column, 0, "cursor_column");
+        assert_eq!(reader.first_display_line, 2, "first_display_line");
+        assert_eq!(reader.scroll_needed, 1, "scroll_needed");
+    }
+
+    #[test]
+    fn right_to_bottom_when_bg_overflows_pans_buffer() {
+        let lines = [
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "012345678",
+        ];
+        let mut reader = LineReader {
+            display_width: 10,
+            display_lines: 5,
+            bg_buf: lines.join(""),
+            prompt_width: 1,
+            prompt_len: 1,
+            bg_line_idx: vec![0, 10, 20, 30, 40, 50, 60],
+            ag_buf: "abcdefghijABCDEFGHIJ".to_owned(),
+            first_buffer_line: 3,
+            first_display_line: 0,
+            penultimate_width: Some(10),
+            cursor_line: 4,
+            cursor_column: 9,
+            ..Default::default()
+        };
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader.cursor_line, 4, "cursor_line");
+        assert_eq!(reader.cursor_column, 0, "cursor_column");
+        assert_eq!(reader.first_buffer_line, 4, "first_buffer_line");
     }
 
     #[test]
