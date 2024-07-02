@@ -127,6 +127,14 @@ struct LineReader {
         g. Show cursor
         
 ## Test cases
+I.  Viewport bounds
+    The cursor is limited to one less line in each direction than the
+    display_height would indicate if more buffer lines exist "off screen"
+    in that direction.
+    A.  Test cases
+        1.  viewport_top is 1 unless the first buffer line is displayed
+        2.  viewport_bottom is one less than the last display line unless
+            the last buffer line is displayed
 I. Char(c)
     A. Insertion widths
         1.  0w (e.g., combining mark u0308 '̈¨')
@@ -140,18 +148,29 @@ I. Char(c)
             c.  input at start of line is appended to preceding line if it
                 fits (eg. 0w char, or 1w char if first char on cursor line
                 is a 2w char that didn't fit preceding line)
+            d.  Input that results in line width > display_width
+                causes reflow, moving excess to start of next line
+                iteratively until resulting in a line with no excess.
         2.  Cursor is maintained in the first available display cell after
             the new input.
             a.  Input that fills line to last column wraps cursor to start
                 of next line.
-            b.  Input that won't fit line wraps character to start of next
-                line and moves cursor to first column after character.
-            c.  Input that pushes characters at cursor to next line moves
+            b.  Input that pushes characters at cursor to next line moves
                 cursor with the reflowed characters
-        6.  Cursor is bound to the viewport
-            a.  Input that puts cursor below viewport adjusts display start
-                to keep cursor on last line of viewport, scrolling up as
-                necessary.
+        3.  Cursor is bound to the viewport
+            a.  Input at end of buffer smaller than display that moves
+                cursor below last line of display decrements
+                first_display_line and scrolls existing display lines up
+                one line
+            b.  Input at end of large buffer moving cursor below last line
+                decrements first_display_line without scrolling
+            c.  Input in buffer smaller than display extending beyond
+                bottom that moves cursor to last line of display decrements
+                first_display_line and scrolls existing display lines up
+                one line
+            d.  Input in buffer larger than display that moves cursor to
+                last line of display decrements_first_display line, but
+                does not scroll existing display lines
 II. Backspace
     A. Removed widths
         1.  0w (e.g., combining mark u0308 '̈¨')
