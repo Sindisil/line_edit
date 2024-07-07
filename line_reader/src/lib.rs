@@ -322,7 +322,7 @@ impl LineReader {
                 [self.cursor.index.offset..]
                 .chars()
                 .next()
-                .and_then(|c| c.width())
+                .and_then(UnicodeWidthChar::width)
                 .unwrap();
             self.cursor.column += cur_char_width;
             self.cursor.index.offset += i;
@@ -354,17 +354,29 @@ impl LineReader {
     }
 
     fn handle_end(&mut self) -> ControlFlow<()> {
-        todo!()
+        let buffer_end: BufferIndex = (
+            self.buffer.len() - 1,
+            self.buffer.last().map(|l| l.text.len()).unwrap(),
+        )
+            .into();
+        if self.cursor.index != buffer_end {
+            self.cursor.line += buffer_end.line - self.cursor.index.line;
+            self.cursor.column = self.buffer[buffer_end.line].width;
+            self.cursor.index = buffer_end;
+            self.adjust_viewport();
+        }
+        ControlFlow::Continue(())
     }
 
     /// Compute last line of viewport
     pub(crate) fn viewport_bottom(&self) -> usize {
-        if self.display_height - self.first_display_line
-            < self.buffer.len() - self.first_buffer_line
+        if self.cursor.index.line == self.buffer.len() - 1
+            || (self.buffer.len() - self.first_buffer_line)
+                <= (self.display_height - self.first_display_line)
         {
-            self.display_height - 2
-        } else {
             self.display_height - 1
+        } else {
+            self.display_height - 2
         }
     }
 
@@ -375,13 +387,14 @@ impl LineReader {
 
     fn adjust_viewport(&mut self) {
         if self.cursor.line > self.viewport_bottom() {
-            self.cursor.line -= 1;
+            let diff = self.cursor.line - self.viewport_bottom();
+            self.cursor.line -= diff;
             if self.first_display_line == 0 {
-                self.first_buffer_line += 1;
+                self.first_buffer_line += diff;
             } else {
-                self.scroll_needed = 1;
+                self.scroll_needed = self.first_display_line.min(diff);
                 self.first_display_line =
-                    self.first_display_line.saturating_sub(1);
+                    self.first_display_line.saturating_sub(diff);
             }
         } else if self.cursor.line < self.viewport_top() {
             self.cursor.line += 1;
@@ -678,7 +691,7 @@ mod tests {
         }
 
         fn build(&self) -> LineReader {
-            let buffer = self.text.as_ref().map_or_else(
+            let mut buffer = self.text.as_ref().map_or_else(
                 || vec![BufferLine { text: String::new(), width: 0 }],
                 |t| {
                     t.iter()
@@ -690,6 +703,12 @@ mod tests {
                         .collect::<Vec<BufferLine>>()
                 },
             );
+            let last_line = buffer.last();
+            if last_line.is_none()
+                || last_line.is_some_and(|l| l.width == self.display_width)
+            {
+                buffer.push(BufferLine::new());
+            }
 
             for l in &buffer {
                 assert!(l.width <= self.display_width,);
@@ -712,11 +731,11 @@ mod tests {
                                 <= buffer[self.input_start.line].len())
                 );
                 assert!(
-                    (self.cursor.index.line == buffer.len()
+                    (self.cursor.index.line == buffer.len() - 1
                         && self.cursor.index.offset == 0)
                         || (self.cursor.index.line < buffer.len()
                             && self.cursor.index.offset
-                                <= buffer[self.cursor.index.line].len())
+                                <= buffer[self.cursor.index.line].len()),
                 );
                 assert!(
                     (self.cursor.index.line > self.input_start.line)
@@ -1195,7 +1214,10 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
-        assert_eq!(reader, expected);
+        assert_eq!(
+            reader, expected,
+            "\nleft: {reader:#?}\nright: {expected:#?}"
+        );
     }
 
     #[test]
@@ -1684,6 +1706,106 @@ mod tests {
 
         let res = reader.handle_event(&event);
         assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn end_at_buffer_end_does_nothing() {
+        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(5);
+        b.cursor(Cursor { column: 0, line: 4, index: (9, 0).into() });
+        let mut reader = b.build();
+        let expected = b.build();
+        let ret = reader.handle_event(&event);
+        assert!(ret.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn end_moves_cursor_to_buffer_end() {
+        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(5);
+        b.cursor(Cursor { column: 5, line: 3, index: (8, 5).into() });
+        let mut reader = b.build();
+
+        b.cursor(Cursor { column: 0, line: 4, index: (9, 0).into() });
+        let expected = b.build();
+        let ret = reader.handle_event(&event);
+        assert!(ret.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn end_past_display_bottom_in_small_buffer_scrolls_up() {
+        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "0123456789", "0123456789", "0123456789"])
+            .input_start((0, 1).into());
+        b.first_buffer_line(0);
+        b.first_display_line(3);
+        b.cursor(Cursor { column: 1, line: 3, index: b.input_start });
+        let mut reader = b.build();
+
+        b.cursor(Cursor { column: 0, line: 4, index: (4, 0).into() });
+        b.first_display_line(0);
+        b.scroll_needed(3);
+        let expected = b.build();
+        let ret = reader.handle_event(&event);
+        assert!(ret.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn end_past_display_bottom_in_large_buffer_pans_up() {
+        let event = Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[
+            ":123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+        ])
+        .input_start((0, 1).into());
+        b.first_buffer_line(0);
+        b.cursor(Cursor { column: 1, line: 0, index: b.input_start });
+        let mut reader = b.build();
+
+        b.cursor(Cursor { column: 0, line: 4, index: (9, 0).into() });
+        b.first_buffer_line(5);
+        let expected = b.build();
+        let ret = reader.handle_event(&event);
+        assert!(ret.is_continue());
         assert_eq!(reader, expected);
     }
 }

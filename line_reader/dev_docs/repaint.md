@@ -236,13 +236,11 @@ VI. Home
 VII. End
     A. Test cases
         1.  End when cursor is at end of buffer does nothing.
-        2.  End moves cursor to end of buffer.
-        3.  End moves cursor to first column after last input character
-        4.  End that would be beyond last display column wraps to column 0
-            of next display line
-        5.  End that moves cursor below bottom pans buffer up so cursor
+        2.  End moves cursor to end of buffer (i.e., the first column after
+            the last input character)
+        3.  End that moves cursor below bottom pans buffer up so cursor
             line is on last display line
-        6.  End that causes buffer to pan down scrolls lesser of lines
+        4.  End that causes buffer to pan down scrolls lesser of lines
             panned or lines above display top
 VIII. Resize
     A. Resize changes
