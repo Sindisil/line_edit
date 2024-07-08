@@ -97,6 +97,12 @@ impl From<(usize, usize)> for BufferIndex {
     }
 }
 
+impl From<BufferIndex> for (usize, usize) {
+    fn from(i: BufferIndex) -> (usize, usize) {
+        (i.line, i.offset)
+    }
+}
+
 // impls for LineReader
 ////////
 
@@ -337,7 +343,25 @@ impl LineReader {
     }
 
     fn handle_delete(&mut self) -> ControlFlow<()> {
-        todo!()
+        // if at end of buffer, nothing to do
+        if self.cursor.index != self.buffer_end() {
+            let (cur_line, cur_offset) = self.cursor.index.into();
+            let mut c_idx =
+                self.buffer[cur_line].text[cur_offset..].char_indices();
+            let c_width =
+                c_idx.next().map(|(_, c)| c.width().unwrap_or(0)).unwrap();
+            let next_c_offset =
+                c_idx.find(|(_, c)| c.width().unwrap_or(0) > 0).map_or_else(
+                    || self.buffer[cur_line].len(),
+                    |(i, _)| i + cur_offset,
+                );
+            self.buffer[cur_line]
+                .text
+                .replace_range(cur_offset..next_c_offset, "");
+            self.buffer[cur_line].width -= c_width;
+            self.reflow(cur_line.saturating_sub(1));
+        }
+        ControlFlow::Continue(())
     }
 
     fn handle_home(&mut self) -> ControlFlow<()> {
@@ -354,11 +378,7 @@ impl LineReader {
     }
 
     fn handle_end(&mut self) -> ControlFlow<()> {
-        let buffer_end: BufferIndex = (
-            self.buffer.len() - 1,
-            self.buffer.last().map(|l| l.text.len()).unwrap(),
-        )
-            .into();
+        let buffer_end = self.buffer_end();
         if self.cursor.index != buffer_end {
             self.cursor.line += buffer_end.line - self.cursor.index.line;
             self.cursor.column = self.buffer[buffer_end.line].width;
@@ -366,6 +386,15 @@ impl LineReader {
             self.adjust_viewport();
         }
         ControlFlow::Continue(())
+    }
+
+    /// Compute index one past last char in buffer
+    fn buffer_end(&self) -> BufferIndex {
+        (
+            self.buffer.len() - 1,
+            self.buffer.last().map(|l| l.text.len()).unwrap(),
+        )
+            .into()
     }
 
     /// Compute last line of viewport
@@ -426,14 +455,7 @@ impl LineReader {
             tl_idx += 1;
         }
 
-        let mut lines = self.buffer.iter();
-        let last = lines.next_back().unwrap();
-        let penultimate = lines.next_back();
-        if last.text.is_empty()
-            && penultimate.is_some_and(|pl| pl.width < self.display_width)
-        {
-            self.buffer.pop();
-        } else if last.width == self.display_width {
+        if self.buffer.last().unwrap().width == self.display_width {
             self.buffer.push(BufferLine::new());
         }
 
@@ -730,12 +752,20 @@ mod tests {
                             && self.input_start.offset
                                 <= buffer[self.input_start.line].len())
                 );
+                assert!(self.cursor.index.line < buffer.len());
                 assert!(
-                    (self.cursor.index.line == buffer.len() - 1
-                        && self.cursor.index.offset == 0)
-                        || (self.cursor.index.line < buffer.len()
-                            && self.cursor.index.offset
-                                <= buffer[self.cursor.index.line].len()),
+                    self.cursor.index.line < buffer.len() - 1
+                        || self.cursor.index.offset
+                            <= buffer[self.cursor.index.line].len(),
+                    "cursor: {:?} buffer.len(): {} text.len(): {}",
+                    self.cursor.index,
+                    buffer.len(),
+                    buffer[self.cursor.index.line].len()
+                );
+                assert!(
+                    self.cursor.index.line == buffer.len() - 1
+                        || self.cursor.index.offset
+                            < buffer[self.cursor.index.line].len()
                 );
                 assert!(
                     (self.cursor.index.line > self.input_start.line)
@@ -1806,6 +1836,83 @@ mod tests {
         let expected = b.build();
         let ret = reader.handle_event(&event);
         assert!(ret.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn delete_at_buffer_end_does_nothing() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":aë🎸io"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 7, line: 0, index: (0, 11).into() });
+        let mut reader = b.build();
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn delete_removes_chars_from_cursor_to_next_base_char() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":aë🎸io"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 2, line: 0, index: (0, 2).into() });
+        let mut reader = b.build();
+
+        b.text(&[":a🎸io"]);
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.text(&[":aio"]);
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+
+        b.text(&[":ao"]);
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn delete_at_line_start_wraps_to_previous_if_new_first_char_fits() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":12345678", "🎸abc"]).input_start((0, 1).into());
+        b.cursor(Cursor { column: 0, line: 1, index: (1, 0).into() });
+        let mut reader = b.build();
+
+        b.text(&[":12345678a", "bc"]);
+        b.cursor(Cursor { column: 9, line: 0, index: (0, 9).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn delete_reflows_buffer_from_new_cursor_line() {
+        let event =
+            Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "0123456789", "0123456789", "0123456789"])
+            .input_start((0, 1).into());
+        b.cursor(Cursor { column: 9, line: 0, index: (0, 9).into() });
+        let mut reader = b.build();
+
+        b.text(&[":123456780", "1234567890", "1234567890", "123456789"]);
+        b.cursor(Cursor { column: 9, line: 0, index: (0, 9).into() });
+        let expected = b.build();
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
         assert_eq!(reader, expected);
     }
 }
