@@ -309,13 +309,34 @@ impl LineReader {
             if self.edited_input.is_some() {
                 todo!("save buffer to edited_history");
             } else {
-                todo!("save buffer to edited_input");
+                self.edited_input = Some(
+                    self.buffer
+                        .iter()
+                        .flat_map(|l| l.text.chars())
+                        .skip(self.prompt_char_count)
+                        .collect(),
+                );
             }
             self.history.len()
         });
         if *i > 0 {
             *i -= 1;
-            todo!("reinit buffer with history[i]");
+            let mut text: String = self
+                .buffer
+                .iter()
+                .flat_map(|l| l.text.chars())
+                .take(self.prompt_char_count)
+                .collect();
+            text.push_str(&self.history[*i]);
+            let width = text.width();
+            let cursor = Cursor {
+                column: width,
+                line: self.first_display_line,
+                index: (0, text.len()).into(),
+            };
+            self.buffer.splice(.., [BufferLine { text, width }]);
+            self.cursor = cursor;
+            self.reflow(0);
         }
         ControlFlow::Continue(())
     }
@@ -2504,7 +2525,22 @@ mod tests {
 
     #[test]
     fn up_when_editing_input_saves_input_and_views_most_recent_history() {
-        todo!();
+        let mut b = LineReaderBuilder::new(10, 5);
+        b.text(&[":123456789", "abc"])
+            .input_start((0, 1).into())
+            .prompt_char_count(1)
+            .cursor(Cursor { column: 3, line: 1, index: (1, 3).into() })
+            .history(&["foo", "bar", "baz"]);
+        let mut reader = b.build();
+        b.history_idx(Some(2))
+            .text(&[":baz"])
+            .cursor(Cursor { column: 4, line: 0, index: (0, 4).into() })
+            .edited_input(Some("123456789abc"));
+        let expected = b.build();
+        let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let res = reader.handle_event(&event);
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
     }
 
     #[test]
