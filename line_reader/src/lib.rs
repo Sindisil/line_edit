@@ -557,16 +557,33 @@ impl LineReader {
         };
         if res_idx > 0 {
             if self.cursor.index.line == nl_idx {
+                // if cursor was on next line, adjust cursor
                 if self.cursor.index.offset < res_idx
                     || res_idx == self.buffer[nl_idx].text.len()
                 {
+                    // char at cursor moved to this line
                     self.cursor.line -= 1;
                     self.cursor.column += tl_width;
                     self.cursor.index.line -= 1;
                     self.cursor.index.offset += self.buffer[tl_idx].len();
                 } else {
+                    // cursor still on next line
                     self.cursor.index.offset -= res_idx;
                     self.cursor.column -= cols_moved;
+                }
+            }
+
+            if self.input_start.line == nl_idx {
+                // if input_start was on next line, adjust it
+                if self.input_start.offset < res_idx
+                    || res_idx == self.buffer[nl_idx].text.len()
+                {
+                    // input_start moved to this line
+                    self.input_start.line -= 1;
+                    self.input_start.offset += self.buffer[tl_idx].len();
+                } else {
+                    // input_start still on next line
+                    self.input_start.offset -= res_idx;
                 }
             }
 
@@ -624,10 +641,11 @@ impl LineReader {
         next.width += cols_moved;
         next.text.insert_str(0, this.text.drain(res_idx..).as_str());
 
-        // if this was the cursor line & char at cursor moved, adjust cursor
         if tl_idx == self.cursor.index.line
             && res_idx <= self.cursor.index.offset
         {
+            // if this was the cursor line & char at cursor moved,
+            // adjust cursor
             self.cursor.line += 1;
             self.cursor.column -= this.width;
             self.cursor.index.line += 1;
@@ -636,6 +654,17 @@ impl LineReader {
             // if next line was cursor line, adjust cursor column
             self.cursor.column += cols_moved;
             self.cursor.index.offset += bytes_moved;
+        }
+
+        if tl_idx == self.input_start.line && res_idx <= self.input_start.offset
+        {
+            // if the line where input_start is located, and chars at or
+            // before input start moved, adjust input_start
+            self.input_start.line += 1;
+            self.input_start.offset -= res_idx;
+        } else if self.input_start.line == tl_idx + 1 {
+            // if next line was input_start.line, adjust input_start column
+            self.input_start.offset += bytes_moved;
         }
     }
 
@@ -2029,9 +2058,11 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(reader, expected);
 
-        b.display_height(5)
-            .first_buffer_line(2)
-            .cursor(Cursor { column: 3, line: 4, index: (6, 5).into() });
+        b.display_height(5).first_buffer_line(2).cursor(Cursor {
+            column: 3,
+            line: 4,
+            index: (6, 5).into(),
+        });
         let expected = b.build();
         let res = reader.handle_event(&Event::Resize(10, 5));
         assert!(res.is_continue());
@@ -2107,6 +2138,37 @@ mod tests {
             ":12345", "678901", "234567", "8🎸234", "567890", "123456",
             "789012", "345678", "901234", "56789ä", "bcdefg", "h",
         ])
+        .display_width(6);
+        let expected = b.build();
+
+        let res = reader.handle_event(&Event::Resize(6, 10));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_smaller_cursor_at_start_lg_prompt() {
+        let mut b = LineReaderBuilder::new(10, 10);
+        b.text(&[
+            "lgprompt:9",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .input_start((0, 9).into())
+        .first_display_line(3)
+        .cursor(Cursor { column: 9, line: 3, index: (0, 9).into() });
+        let mut reader = b.build();
+
+        b.text(&[
+            "lgprom", "pt:901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "h",
+        ])
+        .input_start((1, 3).into())
+        .cursor(Cursor { column: 3, line: 4, index: (1, 3).into() })
         .display_width(6);
         let expected = b.build();
 
@@ -2227,6 +2289,39 @@ mod tests {
             "äbcdefgh",
         ])
         .display_width(10);
+        let expected = b.build();
+        let res = reader.handle_event(&Event::Resize(10, 10));
+        assert!(res.is_continue());
+        assert_eq!(reader, expected);
+    }
+
+    #[test]
+    fn resize_width_larger_cursor_at_start_lg_prompt() {
+        let mut b = LineReaderBuilder::new(6, 10);
+        b.text(&[
+            "lgprom", "pt:901", "234567", "8🎸234", "567890", "123456",
+            "789012", "345678", "901234", "56789ä", "bcdefg", "h",
+        ])
+        .input_start((1, 3).into());
+        b.first_display_line(0).cursor(Cursor {
+            column: 3,
+            line: 1,
+            index: (1, 3).into(),
+        });
+        let mut reader = b.build();
+
+        b.text(&[
+            "lgprompt:9",
+            "012345678",
+            "🎸23456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "äbcdefgh",
+        ])
+        .display_width(10)
+        .input_start((0, 9).into())
+        .cursor(Cursor { column: 9, line: 0, index: (0, 9).into() });
         let expected = b.build();
         let res = reader.handle_event(&Event::Resize(10, 10));
         assert!(res.is_continue());
