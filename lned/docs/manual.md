@@ -319,6 +319,24 @@ undo stack.
 For more details about the undo/redo system, see the 'u' (undo) command.
 
 
+'t' (transfer, or copy)
+
+#### Syntax
+
+(., .)t\<destination\>
+
+#### Behavior
+
+Copy the addressed lines to just after the last line specified by
+\<destination\>.
+
+If '0' is specified as the destination address, the
+addressed lines are copied to the beginning of the buffer. The
+destination may not fall within the span of copied lines.
+
+The current line number will be set to the resulting address of the
+last line copied.
+
 'u' (undo)
 
 #### Syntax
