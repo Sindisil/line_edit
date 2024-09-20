@@ -170,6 +170,14 @@ pub fn run(
                         buffer.do_redo();
                         Ok(())
                     }
+                    Cmd::Substitute(
+                        _address,
+                        _pattern,
+                        _replacement,
+                        _flags,
+                    ) => {
+                        todo!();
+                    }
                     Cmd::Transfer(address, destination) => {
                         transfer_cmd(&mut buffer, *address, *destination)
                     }
