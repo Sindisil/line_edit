@@ -197,7 +197,8 @@ impl Address {
                     right = Some(eval_line_number(graphemes, buffer.len())?);
                 }
                 Some(&"/") => {
-                    let pattern = parse_pattern(graphemes)?;
+                    graphemes.next();
+                    let pattern = parse_pattern(graphemes, "/")?;
                     if !pattern.is_empty() {
                         *previous_pattern =
                             Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -210,7 +211,8 @@ impl Address {
                     right = Some(eval_line_number(graphemes, line)?);
                 }
                 Some(&"?") => {
-                    let pattern = parse_pattern(graphemes)?;
+                    graphemes.next();
+                    let pattern = parse_pattern(graphemes, "?")?;
                     if !pattern.is_empty() {
                         *previous_pattern =
                             Some(Regex::new(&pattern).map_err(Error::Regex)?);
@@ -418,12 +420,19 @@ fn eval_line_number<'a>(
     line.checked_add_signed(offset).ok_or(Error::OffsetOverflow)
 }
 
-fn parse_pattern<'a>(
+fn parse_pattern_delimiter<'a>(
     graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
 ) -> Result<String, Error> {
-    let delimiter = graphemes
+    graphemes
         .next_if(|gr| *gr != "\n" && *gr != "\r\n" && *gr != " ")
-        .ok_or(Error::InvalidPatternDelimiter)?;
+        .ok_or(Error::InvalidPatternDelimiter)
+        .map(|d| d.to_owned())
+}
+
+fn parse_pattern<'a>(
+    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    delimiter: &str,
+) -> Result<String, Error> {
     let mut pattern = String::new();
     while let Some(gr) = graphemes.next_if(|gr| *gr != "\n" && *gr != "\r\n") {
         if gr == delimiter {
@@ -550,12 +559,13 @@ fn parse_file_cmd<'a>(
 }
 
 fn parse_global_cmd<'a>(
-    graphemes: &mut Peekable<impl Iterator<Item = &'a str>>,
+    graphemes: &'a mut Peekable<impl Iterator<Item = &'a str>>,
     address: Option<Address>,
     previous_pattern: &mut Option<Regex>,
     input: &mut impl LineRead,
 ) -> Result<Cmd, Error> {
-    let pattern = parse_pattern(graphemes)?;
+    let delimiter = parse_pattern_delimiter(graphemes)?;
+    let pattern = parse_pattern(graphemes, &delimiter)?;
     if !(pattern.is_empty()) {
         *previous_pattern = Some(Regex::new(&pattern).map_err(Error::Regex)?);
     }
@@ -730,33 +740,39 @@ mod tests {
     }
 
     #[test]
-    fn parse_pattern_invalid_delimiter() {
+    fn parse_pattern_delimiter_invalid() {
         let mut input = " stuff + other_stuff. \n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input);
+        let res = parse_pattern_delimiter(&mut input);
         assert!(matches!(res, Err(Error::InvalidPatternDelimiter)));
     }
 
     #[test]
     fn parse_pattern_trailing_backslash() {
         let mut input = "/stuff + other_stuff.\\\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter)
+            .expect_err("trailing backslash");
         assert!(matches!(res, Error::TrailingBackslash));
         let mut input = "/stuff + other_stuff.\\".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).expect_err("trailing backslash");
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter)
+            .expect_err("trailing backslash");
         assert!(matches!(res, Error::TrailingBackslash));
     }
 
     #[test]
     fn parse_pattern_no_terminating_delimiter() {
         let mut input = "/stuff\\/other_stuff.\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter).unwrap();
         assert_eq!("stuff/other_stuff.".to_owned(), res);
     }
 
     #[test]
     fn parse_pattern_escaped_terminator() {
         let mut input = "/stuff\\/other_stuff./\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter).unwrap();
         assert_eq!("stuff/other_stuff.".to_owned(), res);
     }
 
@@ -764,14 +780,16 @@ mod tests {
     fn parse_pattern_escaped_chars() {
         let mut input =
             "?stuff \\+ other_stuff\\.?\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter).unwrap();
         assert_eq!("stuff \\+ other_stuff\\.".to_owned(), res);
     }
 
     #[test]
     fn parse_pattern_no_escaped_chars() {
         let mut input = "/stuff + other_stuff./\n".graphemes(true).peekable();
-        let res = parse_pattern(&mut input).unwrap();
+        let delimiter = parse_pattern_delimiter(&mut input).unwrap();
+        let res = parse_pattern(&mut input, &delimiter).unwrap();
         assert_eq!("stuff + other_stuff.".to_owned(), res);
     }
 
