@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 use crate::command::Address;
-use crate::edit_buffer::undo_stack::{ChangeSet, Diff, UndoStack};
+pub use crate::edit_buffer::undo_stack::ChangeSet;
+use crate::edit_buffer::undo_stack::{Diff, UndoStack};
 
 #[derive(Debug, Clone)]
 pub struct EditBuffer {
-    pub current_line: usize,
-    pub filename: Option<PathBuf>,
+    current_line: usize,
+    filename: Option<PathBuf>,
     default_eol: Option<&'static str>,
     undo_stack: UndoStack,
     clean_fingerprint: Option<u64>,
@@ -490,6 +491,10 @@ impl EditBuffer {
     pub fn clear_text(&mut self) {
         self.text.clear();
         self.default_eol = None;
+    }
+
+    pub fn default_eol(&mut self) -> &'static str {
+        self.default_eol.get_or_insert_with(line_reader::native_eol)
     }
 }
 

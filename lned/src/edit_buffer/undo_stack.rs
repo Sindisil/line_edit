@@ -48,6 +48,10 @@ impl ChangeSet {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.diffs.is_empty()
+    }
+
     pub fn push_add(&mut self, position: usize, lines_added: Vec<String>) {
         self.diffs.push(Diff::Add(position, lines_added));
     }

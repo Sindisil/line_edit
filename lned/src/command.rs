@@ -35,7 +35,7 @@ pub enum Cmd {
     Write(Option<Address>, Option<PathBuf>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum SubstitutionScope {
     Single(usize),
     Global,
@@ -315,6 +315,9 @@ impl Cmd {
             Some("p") => parse_no_args(&mut graphemes, Cmd::Print(address)),
             Some("q") => parse_no_address(address, Cmd::Quit)
                 .and_then(|cmd| parse_no_args(&mut graphemes, cmd)),
+            Some("s") => {
+                parse_substitute_cmd(&mut graphemes, address, previous_pattern)
+            }
             Some("t") => parse_transfer_cmd(
                 &mut graphemes,
                 buffer,
