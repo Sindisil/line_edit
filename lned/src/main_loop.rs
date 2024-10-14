@@ -531,7 +531,7 @@ fn substitute_cmd(
             .rfind("\r\n")
             .or_else(|| line.rfind('\n'))
             .unwrap_or(line.len());
-        let first_match = pattern.find_iter(line).nth(target_match);
+        let first_match = pattern.find_iter(&line[..eol_idx]).nth(target_match);
         let step = if let Some(first_match) = first_match {
             span_start.get_or_insert(line_num);
             let mut edited_line = line[..first_match.start()].to_owned();
@@ -1351,6 +1351,21 @@ mod tests {
         )
         .unwrap();
         assert_eq!(buffer[5], "sev't' eight' ninet' tw'ty\r\n");
+    }
+
+    #[test]
+    fn substitute_cmd_current_line_at_eol() {
+        let mut buffer = EditBuffer::from(vec!["some text\n"]);
+        let expected = EditBuffer::from(vec!["some text!\n"]);
+        substitute_cmd(
+            &mut buffer,
+            None,
+            &Regex::new("$").unwrap(),
+            "!",
+            SubstitutionScope::Single(1),
+        )
+        .unwrap();
+        assert_eq!(&buffer[..], &expected[..]);
     }
 
     #[test]
