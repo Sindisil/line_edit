@@ -452,7 +452,7 @@ fn null_cmd(
                 buffer.set_current_line(buffer.current_line() + 1);
             })
         }
-        _ => print_cmd(buffer, output, address),
+        _ => print_cmd(buffer, output, address.map(|a| a.as_end())),
     }
 }
 
@@ -738,7 +738,8 @@ mod tests {
             EditBuffer::from(vec!["1\r\n", "2", "3", "4", "5", "6"]);
         buffer.set_current_line(5);
         null_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
-        assert_eq!(&output[..], b"2\r\n3\r\n4\r\n");
+        let output = str::from_utf8(&output[..]).unwrap();
+        assert_eq!(output, "4\r\n");
     }
 
     #[test]

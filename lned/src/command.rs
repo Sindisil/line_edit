@@ -146,6 +146,10 @@ impl Address {
         self.end
     }
 
+    pub fn as_end(&self) -> Self {
+        Self::line(self.end)
+    }
+
     pub fn line_count(&self) -> usize {
         self.end - self.start + 1
     }
