@@ -1,13 +1,20 @@
-use std::cmp::Ordering;
+mod edit_buffer;
+mod history_stack;
+mod render_context;
+
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
 
-use crossterm::cursor::{self, Hide, MoveTo, Show};
+use crossterm::cursor::{self, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
-use crossterm::{ExecutableCommand, QueueableCommand};
+use crossterm::terminal;
+use crossterm::ExecutableCommand;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::edit_buffer::EditBuffer;
+use crate::history_stack::HistoryStack;
+use crate::render_context::RenderContext;
 
 // Public structs, enums, and traits
 ///////////
@@ -32,50 +39,6 @@ pub struct LineReader {
 // Non-public structs, enums, and traits
 ///////////////
 
-#[derive(Debug, Default, Clone, PartialEq)]
-struct HistoryStack {
-    lines: Vec<String>,
-    edited: Vec<Option<String>>,
-    index: usize,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct EditBuffer {
-    lines: Vec<BufferLine>,
-    prompt_char_count: usize,
-    input_start: BufferIndex,
-    draft: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct RenderContext {
-    display_width: usize,
-    display_height: usize,
-    cursor: Cursor,
-    first_display_line: usize,
-    first_buffer_line: usize,
-    scroll_needed: usize,
-}
-
-#[derive(Debug, Default, Clone, PartialEq)]
-struct BufferLine {
-    text: String,
-    width: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct BufferIndex {
-    line: usize,
-    offset: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-struct Cursor {
-    column: usize,
-    line: usize,
-    index: BufferIndex,
-}
-
 // public functions
 ////////
 
@@ -90,35 +53,6 @@ pub fn native_eol() -> &'static str {
 
 // Non-public functions
 ////////
-
-impl BufferLine {
-    pub(crate) fn len(&self) -> usize {
-        self.text.len()
-    }
-
-    pub(crate) fn new() -> BufferLine {
-        BufferLine { text: String::new(), width: 0 }
-    }
-}
-
-impl From<&str> for BufferLine {
-    fn from(value: &str) -> BufferLine {
-        let width = value.width();
-        BufferLine { text: value.to_owned(), width }
-    }
-}
-
-impl From<(usize, usize)> for BufferIndex {
-    fn from((line, offset): (usize, usize)) -> BufferIndex {
-        BufferIndex { line, offset }
-    }
-}
-
-impl From<BufferIndex> for (usize, usize) {
-    fn from(i: BufferIndex) -> (usize, usize) {
-        (i.line, i.offset)
-    }
-}
 
 // impls for LineReader
 ////////
@@ -201,13 +135,7 @@ impl LineReader {
 
         let prev_bytes = output_buffer.len();
         if let Some(true) = res.break_value() {
-            output_buffer.extend(
-                self.buffer
-                    .lines
-                    .iter()
-                    .flat_map(|l| l.text.chars())
-                    .skip(self.buffer.prompt_char_count),
-            );
+            output_buffer.extend(self.buffer.input_chars());
         }
         output_buffer.push_str(native_eol());
         Ok(output_buffer.len() - prev_bytes)
@@ -228,110 +156,6 @@ impl LineRead for LineReader {
 // impls for RenderContext
 ////////
 
-impl RenderContext {
-    pub fn new(
-        display_width: usize,
-        display_height: usize,
-        first_display_line: usize,
-    ) -> RenderContext {
-        RenderContext {
-            display_width,
-            display_height,
-            first_display_line,
-            ..Default::default()
-        }
-    }
-
-    /// Compute first line of viewport
-    pub fn viewport_top(&self) -> usize {
-        (self.first_buffer_line > 0).into()
-    }
-
-    /// Compute last line of viewport
-    fn viewport_bottom(&self, buffer: &EditBuffer) -> usize {
-        if self.cursor.index.line == buffer.lines.len() - 1
-            || (buffer.lines.len() - self.first_buffer_line)
-                <= (self.display_height - self.first_display_line)
-        {
-            self.display_height - 1
-        } else {
-            self.display_height - 2
-        }
-    }
-
-    #[cfg(not(tarpaulin_include))]
-    /// render current buffer to display
-    fn repaint(&mut self, buffer: &EditBuffer) -> io::Result<()> {
-        let display_lines = self.display_height - self.first_display_line;
-        let last_displayed =
-            self.first_buffer_line + buffer.lines.len().min(display_lines);
-
-        let mut stdout = io::stdout().lock();
-
-        stdout.queue(Hide)?;
-
-        // convert values to u16 for crossterm
-        let first_display_line = u16::try_from(self.first_display_line)
-            .expect("first_display_line fits u16");
-        let cursor_column =
-            u16::try_from(self.cursor.column).expect("cursor column fits u16");
-        let cursor_line =
-            u16::try_from(self.cursor.line).expect("cursor line fits u16");
-
-        stdout
-            .queue(MoveTo(0, first_display_line))?
-            .queue(Clear(ClearType::FromCursorDown))?;
-
-        if self.scroll_needed > 0 {
-            let scroll_needed = u16::try_from(self.scroll_needed)
-                .expect("scroll needed fits in u16");
-            stdout.queue(ScrollUp(scroll_needed - 1))?;
-            self.scroll_needed = 0;
-        }
-
-        for line in &buffer.lines[self.first_buffer_line..last_displayed] {
-            stdout.write_all(line.text.as_bytes())?;
-        }
-
-        stdout.queue(MoveTo(cursor_column, cursor_line))?.queue(Show)?.flush()
-    }
-
-    fn adjust_viewport(&mut self, buffer: &EditBuffer) {
-        if self.cursor.line > self.viewport_bottom(buffer) {
-            let diff = self.cursor.line - self.viewport_bottom(buffer);
-            self.cursor.line = self.viewport_bottom(buffer);
-            if self.first_display_line == 0 {
-                self.first_buffer_line += diff;
-            } else {
-                self.scroll_needed = self.first_display_line.min(diff);
-                self.first_display_line =
-                    self.first_display_line.saturating_sub(diff);
-                self.first_buffer_line += diff - self.scroll_needed;
-            }
-        } else if self.cursor.line < self.viewport_top() {
-            let diff = self.viewport_top() - self.cursor.line;
-            self.cursor.line = self.viewport_top();
-            self.first_buffer_line =
-                self.first_buffer_line.saturating_sub(diff);
-        }
-        if buffer.lines.len() <= self.display_height {
-            if self.first_buffer_line != 0 {
-                // lines above display
-                self.cursor.line += self.first_buffer_line;
-                self.first_buffer_line = 0;
-            } else if self.display_height - self.first_display_line
-                < buffer.lines.len()
-            {
-                // lines below display
-                self.scroll_needed = buffer.lines.len()
-                    - (self.display_height - self.first_display_line);
-                self.cursor.line -= self.scroll_needed;
-                self.first_display_line -= self.scroll_needed;
-            }
-        }
-    }
-}
-
 struct TerminalSession {}
 impl Drop for TerminalSession {
     #[cfg(not(tarpaulin_include))]
@@ -349,344 +173,6 @@ impl Default for EditBuffer {
             input_start: (0, 0).into(),
             draft: None,
         }
-    }
-}
-
-impl EditBuffer {
-    #[must_use]
-    fn new() -> EditBuffer {
-        EditBuffer { ..Default::default() }
-    }
-
-    fn set_prompt(&mut self, render_ctx: &mut RenderContext, prompt: &str) {
-        let prompt_line =
-            BufferLine { text: prompt.to_owned(), width: prompt.width() };
-        self.input_start = (0, prompt_line.text.len()).into();
-        self.prompt_char_count = prompt.chars().count();
-        render_ctx.cursor = Cursor {
-            column: prompt_line.width,
-            line: render_ctx.first_display_line,
-            index: self.input_start,
-        };
-        self.lines.splice(.., [prompt_line]);
-        self.reflow(render_ctx, 0);
-    }
-
-    #[must_use]
-    pub fn prompt(&self) -> String {
-        self.lines
-            .iter()
-            .flat_map(|l| l.text.chars())
-            .take(self.prompt_char_count)
-            .collect()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.input_start == self.buffer_end()
-    }
-
-    /// Compute index one past last char in buffer
-    fn buffer_end(&self) -> BufferIndex {
-        (self.lines.len() - 1, self.lines.last().map(|l| l.text.len()).unwrap())
-            .into()
-    }
-
-    fn save_draft(&mut self) {
-        let draft = self.draft.get_or_insert_with(String::new);
-        draft.clear();
-        draft.extend(
-            self.lines
-                .iter()
-                .flat_map(|l| l.text.chars())
-                .skip(self.prompt_char_count),
-        );
-    }
-
-    fn input_chars(&self) -> impl Iterator<Item = char> + use<'_> {
-        self.lines
-            .iter()
-            .flat_map(|l| l.text.chars())
-            .skip(self.prompt_char_count)
-    }
-    /// Reflow buffer lines to fit `display_width`, and
-    /// snap cursor location to within viewport.
-    /// Also might result in setting scroll needed.
-    fn reflow(&mut self, render_ctx: &mut RenderContext, start: usize) {
-        let mut tl_idx = start;
-        while tl_idx < self.lines.len() {
-            match self.lines[tl_idx].width.cmp(&render_ctx.display_width) {
-                Ordering::Less => {
-                    if self.try_fill_from_next(render_ctx, tl_idx).is_none()
-                        || self.lines[tl_idx].width == render_ctx.display_width
-                    {
-                        tl_idx += 1;
-                    }
-                }
-                Ordering::Greater => {
-                    self.move_overflow_to_next(render_ctx, tl_idx);
-                    tl_idx += 1;
-                }
-                Ordering::Equal => {
-                    if tl_idx == render_ctx.cursor.index.line
-                        && render_ctx.cursor.column >= render_ctx.display_width
-                    {
-                        render_ctx.cursor.line += 1;
-                        render_ctx.cursor.column = 0;
-                        render_ctx.cursor.index.line += 1;
-                        render_ctx.cursor.index.offset = 0;
-                        if render_ctx.cursor.index.line == self.lines.len() {
-                            self.lines.push(BufferLine::new());
-                        }
-                    }
-                    tl_idx += 1;
-                }
-            }
-        }
-
-        if self.lines.last().unwrap().width == render_ctx.display_width {
-            self.lines.push(BufferLine::new());
-        }
-
-        render_ctx.adjust_viewport(self);
-    }
-
-    // attempt to fill this line, up to but not beyond,
-    // display_width.
-    // returns Some(prev_line_len) (i.e., idx of first
-    // moved char), or None if no chars moved
-    fn try_fill_from_next(
-        &mut self,
-        render_ctx: &mut RenderContext,
-        tl_idx: usize,
-    ) -> Option<(usize, usize)> {
-        if tl_idx == self.lines.len() - 1 {
-            return None;
-        }
-
-        let tl_width = self.lines[tl_idx].width;
-        let nl_idx = tl_idx + 1;
-        let moved = self.lines[nl_idx].text.char_indices().try_fold(
-            (0, 0),
-            |(res_idx, cols_moved), (i, c)| {
-                let c_width = c.width().unwrap_or(0);
-                if render_ctx.display_width >= (tl_width + cols_moved + c_width)
-                {
-                    ControlFlow::Continue((i + 1, cols_moved + c_width))
-                } else {
-                    ControlFlow::Break((res_idx, cols_moved))
-                }
-            },
-        );
-        let (res_idx, cols_moved) = match moved {
-            ControlFlow::Continue(result) | ControlFlow::Break(result) => {
-                result
-            }
-        };
-        if res_idx > 0 {
-            if render_ctx.cursor.index.line == nl_idx {
-                // if cursor was on next line, adjust cursor
-                if render_ctx.cursor.index.offset < res_idx
-                    || res_idx == self.lines[nl_idx].text.len()
-                {
-                    // char at cursor moved to this line
-                    render_ctx.cursor.line -= 1;
-                    render_ctx.cursor.column += tl_width;
-                    render_ctx.cursor.index.line -= 1;
-                    render_ctx.cursor.index.offset += self.lines[tl_idx].len();
-                } else {
-                    // cursor still on next line
-                    render_ctx.cursor.index.offset -= res_idx;
-                    render_ctx.cursor.column -= cols_moved;
-                }
-            }
-
-            if self.input_start.line == nl_idx {
-                // if input_start was on next line, adjust it
-                if self.input_start.offset < res_idx
-                    || res_idx == self.lines[nl_idx].text.len()
-                {
-                    // input_start moved to this line
-                    self.input_start.line -= 1;
-                    self.input_start.offset += self.lines[tl_idx].len();
-                } else {
-                    // input_start still on next line
-                    self.input_start.offset -= res_idx;
-                }
-            }
-
-            let (this_part, next_part) = self.lines.split_at_mut(nl_idx);
-            let this_line = &mut this_part[tl_idx];
-            let next_line = &mut next_part[0];
-            this_line.text.extend(next_line.text.drain(..res_idx));
-            this_line.width += cols_moved;
-            next_line.width -= cols_moved;
-        }
-
-        if self.lines[nl_idx].text.is_empty()
-            && self.lines[tl_idx].width < render_ctx.display_width
-        {
-            self.lines.remove(nl_idx);
-            if render_ctx.cursor.index.line > tl_idx {
-                render_ctx.cursor.index.line -= 1;
-                render_ctx.cursor.line -= 1;
-            }
-        }
-
-        match res_idx {
-            0 => None,
-            _ => Some((res_idx, cols_moved)),
-        }
-    }
-
-    fn move_overflow_to_next(
-        &mut self,
-        render_ctx: &mut RenderContext,
-        tl_idx: usize,
-    ) {
-        assert!(self.lines[tl_idx].width > render_ctx.display_width);
-        // check to see if there's a next_line & push one if not
-        if tl_idx == self.lines.len() - 1 {
-            self.lines.push(BufferLine::new());
-        }
-
-        // move this_line's residue to beginning of next line
-        let mut cols = 0;
-        let (this, next) = self.lines.split_at_mut(tl_idx + 1);
-        let (this, next) = (&mut this[tl_idx], &mut next[0]);
-        let (res_idx, _) = this
-            .text
-            .char_indices()
-            .find(|(_, c)| {
-                let c_width = c.width().unwrap_or(0);
-                if render_ctx.display_width - cols < c_width {
-                    true
-                } else {
-                    cols += c_width;
-                    false
-                }
-            })
-            .unwrap();
-        let cols_moved = this.width - cols;
-        let bytes_moved = this.len() - res_idx;
-        this.width = cols;
-        next.width += cols_moved;
-        next.text.insert_str(0, this.text.drain(res_idx..).as_str());
-
-        if tl_idx == render_ctx.cursor.index.line
-            && res_idx <= render_ctx.cursor.index.offset
-        {
-            // if this was the cursor line & char at cursor moved,
-            // adjust cursor
-            render_ctx.cursor.line += 1;
-            render_ctx.cursor.column -= this.width;
-            render_ctx.cursor.index.line += 1;
-            render_ctx.cursor.index.offset -= res_idx;
-        } else if render_ctx.cursor.index.line == tl_idx + 1 {
-            // if next line was cursor line, adjust cursor column
-            render_ctx.cursor.column += cols_moved;
-            render_ctx.cursor.index.offset += bytes_moved;
-        }
-
-        if tl_idx == self.input_start.line && res_idx <= self.input_start.offset
-        {
-            // if the line where input_start is located, and chars at or
-            // before input start moved, adjust input_start
-            self.input_start.line += 1;
-            self.input_start.offset -= res_idx;
-        } else if self.input_start.line == tl_idx + 1 {
-            // if next line was input_start.line, adjust input_start column
-            self.input_start.offset += bytes_moved;
-        }
-    }
-
-    fn set(&mut self, render_ctx: &mut RenderContext, line: impl AsRef<str>) {
-        let mut text = self.prompt();
-        self.input_start = (0, text.len()).into();
-        text.push_str(line.as_ref());
-        let width = text.width();
-        let cursor = Cursor {
-            column: width,
-            line: render_ctx.first_display_line,
-            index: (0, text.len()).into(),
-        };
-        self.lines.splice(.., [BufferLine { text, width }]);
-        render_ctx.cursor = cursor;
-        self.reflow(render_ctx, 0);
-    }
-
-    //    fn set_from_draft(&mut self, render_ctx: &mut RenderContext) {
-    //        let mut text = self.prompt();
-    //        self.input_start = (0, text.len()).into();
-    //        text.push_str(self.draft.take());
-    //        let width = text.width();
-    //        let cursor = Cursor {
-    //            column: width,
-    //            line: render_ctx.first_display_line,
-    //            index: (0, text.len()).into(),
-    //        };
-    //        self.lines.splice(.., [BufferLine { text, width }]);
-    //        render_ctx.cursor = cursor;
-    //        self.reflow(render_ctx, 0);
-    //    }
-}
-
-impl HistoryStack {
-    #[must_use]
-    fn new() -> HistoryStack {
-        HistoryStack { ..Default::default() }
-    }
-
-    fn is_at_top(&self) -> bool {
-        self.index == self.lines.len()
-    }
-
-    fn is_at_bottom(&self) -> bool {
-        self.index == 0
-    }
-
-    fn push(&mut self, line: String) {
-        self.lines.push(line);
-        self.edited.push(None);
-        self.index = self.lines.len();
-    }
-
-    fn current(&mut self) -> Option<(&str, &mut Option<String>)> {
-        if self.index == self.lines.len() {
-            return None;
-        }
-        Some((self.lines[self.index].as_str(), &mut self.edited[self.index]))
-    }
-
-    fn next_newer(&mut self) -> Option<(&str, &mut Option<String>)> {
-        self.index = self.lines.len().min(self.index + 1);
-        if self.index == self.lines.len() {
-            return None;
-        }
-        Some((self.lines[self.index].as_str(), &mut self.edited[self.index]))
-    }
-
-    fn next_older(&mut self) -> Option<(&str, &mut Option<String>)> {
-        if self.index == 0 {
-            return None;
-        }
-        self.index -= 1;
-        Some((self.lines[self.index].as_str(), &mut self.edited[self.index]))
-    }
-
-    fn last(&mut self) -> Option<(&str, &mut Option<String>)> {
-        if self.lines.is_empty() {
-            None
-        } else {
-            let last = self.lines.len() - 1;
-            Some((self.lines[last].as_ref(), &mut self.edited[last]))
-        }
-    }
-
-    fn rewind(&mut self) {
-        for e in &mut self.edited {
-            e.take();
-        }
-        self.index = self.lines.len();
     }
 }
 
@@ -781,9 +267,7 @@ fn handle_esc(
     render_ctx: &mut RenderContext,
     history: &mut HistoryStack,
 ) -> ControlFlow<bool> {
-    if let Some(draft) = buffer.draft.take() {
-        buffer.set(render_ctx, draft);
-    }
+    buffer.set_from_draft(render_ctx);
     history.rewind();
     ControlFlow::Continue(())
 }
@@ -813,11 +297,12 @@ fn handle_down(
     // If there is none, take draft to load buffer
     // Otherwise load buffer edited, if any, or accepted.
     if let Some((ah, eh)) = history.next_newer() {
-        buffer.set(render_ctx, eh.as_ref().map_or(ah, |eh| eh.as_str()));
+        buffer.set_input_text(
+            render_ctx,
+            eh.as_ref().map_or(ah, |eh| eh.as_str()),
+        );
     } else {
-        let draft =
-            buffer.draft.take().expect("viewing history, so should be a draft");
-        buffer.set(render_ctx, draft);
+        buffer.set_from_draft(render_ctx);
     };
 
     ControlFlow::Continue(())
@@ -855,8 +340,10 @@ fn handle_up(
         let (accepted, edited) = history
             .next_older()
             .expect("shouldn't be either at_top or at_bottom");
-        buffer
-            .set(render_ctx, edited.as_ref().map_or(accepted, |e| e.as_str()));
+        buffer.set_input_text(
+            render_ctx,
+            edited.as_ref().map_or(accepted, |e| e.as_str()),
+        );
     }
     ControlFlow::Continue(())
 }
@@ -875,9 +362,10 @@ fn handle_char_input(
     }
 
     // insert new char at curser and let reflow sort it out
-    let line = &mut buffer.lines[render_ctx.cursor.index.line];
-    line.text.insert(render_ctx.cursor.index.offset, c);
-    line.width += c_width;
+    buffer.lines[render_ctx.cursor.index.line]
+        .text
+        .insert(render_ctx.cursor.index.offset, c);
+    buffer.lines[render_ctx.cursor.index.line].width += c_width;
     render_ctx.cursor.index.offset += c.len_utf8();
     render_ctx.cursor.column += c_width;
 
@@ -1050,8 +538,9 @@ mod tests {
     use super::*;
 
     use crossterm::event::KeyModifiers;
-
     use similar_asserts::assert_eq;
+
+    use crate::render_context::Cursor;
 
     fn make_buf(lines: &[&str], prompt: char) -> EditBuffer {
         let mut buf = EditBuffer { lines: Vec::new(), ..Default::default() };
@@ -1065,119 +554,6 @@ mod tests {
             l.width = l.text.width();
         }
         buf
-    }
-
-    #[test]
-    fn viewport_all_within_display() {
-        let buffer = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "012345".into(),
-            ],
-            prompt_char_count: 1,
-            input_start: (0, 1).into(),
-            draft: None,
-        };
-        let render_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: Cursor { column: 6, line: 2, index: (2, 6).into() },
-            ..Default::default()
-        };
-        assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 1
-        );
-        assert_eq!(render_ctx.viewport_top(), 0);
-    }
-
-    #[test]
-    fn viewport_buffer_beyond_top() {
-        let buffer = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345".into(),
-            ],
-            prompt_char_count: 1,
-            input_start: (0, 1).into(),
-            draft: None,
-        };
-        let render_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: Cursor { column: 6, line: 4, index: (6, 6).into() },
-            first_buffer_line: 2,
-            ..Default::default()
-        };
-        let vp_bottom = render_ctx.viewport_bottom(&buffer);
-        let vp_top = render_ctx.viewport_top();
-        assert_eq!(vp_bottom, render_ctx.display_height - 1);
-        assert_eq!(vp_top, 1);
-    }
-
-    #[test]
-    fn viewport_buffer_beyond_bottom() {
-        let buffer = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345".into(),
-            ],
-            prompt_char_count: 1,
-            input_start: (0, 1).into(),
-            draft: None,
-        };
-        let render_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: Cursor { column: 1, line: 0, index: (0, 1).into() },
-            ..Default::default()
-        };
-        assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 2
-        );
-        assert_eq!(render_ctx.viewport_top(), 0);
-    }
-
-    #[test]
-    fn viewport_buffer_beyond_both() {
-        let buffer = EditBuffer {
-            lines: vec![
-                ":123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "0123456789".into(),
-                "012345".into(),
-            ],
-            input_start: (0, 1).into(),
-            prompt_char_count: 1,
-            draft: None,
-        };
-        let render_ctx = RenderContext {
-            display_width: 10,
-            display_height: 5,
-            cursor: Cursor { column: 5, line: 2, index: (3, 5).into() },
-            first_buffer_line: 1,
-            ..Default::default()
-        };
-        assert_eq!(
-            render_ctx.viewport_bottom(&buffer),
-            render_ctx.display_height - 2
-        );
-        assert_eq!(render_ctx.viewport_top(), 1);
     }
 
     #[test]
@@ -3107,8 +2483,7 @@ mod tests {
             prompt_char_count: 1,
             draft: Some("123456789abc".to_owned()),
         };
-        let mut expected_hs = hs.clone();
-        expected_hs.index = 2;
+        let expected_hs = HistoryStack { index: 2, ..hs.clone() };
         let expected_ctx = RenderContext {
             cursor: Cursor { column: 4, line: 0, index: (0, 4).into() },
             ..ctx
