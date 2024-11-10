@@ -217,7 +217,7 @@ fn append_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_append(address, lines, None);
     Ok(())
@@ -233,7 +233,7 @@ fn change_cmd(
     }
 
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_change(address, lines, None);
     Ok(())
@@ -393,7 +393,7 @@ fn insert_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_insert(address, lines, None);
     Ok(())
