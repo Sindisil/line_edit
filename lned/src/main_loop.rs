@@ -217,7 +217,7 @@ fn append_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_append(address, lines, None);
     Ok(())
@@ -233,7 +233,7 @@ fn change_cmd(
     }
 
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_change(address, lines, None);
     Ok(())
@@ -393,7 +393,7 @@ fn insert_cmd(
         return Err(Error::InvalidAddress);
     }
     let mut lines = Vec::new();
-    Cmd::read_lines(input, &mut lines)
+    Cmd::read_input_lines(input, &mut lines)
         .map_err(|source| Error::ReadLines { source })?;
     buffer.do_insert(address, lines, None);
     Ok(())
@@ -531,7 +531,7 @@ fn substitute_cmd(
             .rfind("\r\n")
             .or_else(|| line.rfind('\n'))
             .unwrap_or(line.len());
-        let first_match = pattern.find_iter(line).nth(target_match);
+        let first_match = pattern.find_iter(&line[..eol_idx]).nth(target_match);
         let step = if let Some(first_match) = first_match {
             span_start.get_or_insert(line_num);
             let mut edited_line = line[..first_match.start()].to_owned();
@@ -551,16 +551,19 @@ fn substitute_cmd(
         } else {
             // no match - apply span of matches up to this point,
             // if any
-            let step = replacement_lines.len().max(1);
             if let Some(span_start) = span_start.take() {
+                let step =
+                    replacement_lines.len() - (line_num - span_start) + 1;
                 buffer.do_change(
-                    Some(Address::span(span_start, line_num)),
+                    Some(Address::span(span_start, line_num - 1)),
                     replacement_lines,
                     Some(&mut changes),
                 );
                 replacement_lines = Vec::new();
+                step
+            } else {
+                1
             }
-            step
         };
         if line_num == last_line {
             if let Some(span_start) = span_start {
@@ -579,6 +582,7 @@ fn substitute_cmd(
     if changes.is_empty() {
         Err(Error::NoMatch)
     } else {
+        changes.current_line_after = buffer.current_line();
         buffer.push_undo(changes);
         Ok(())
     }
@@ -1350,6 +1354,21 @@ mod tests {
     }
 
     #[test]
+    fn substitute_cmd_current_line_at_eol() {
+        let mut buffer = EditBuffer::from(vec!["some text\n"]);
+        let expected = EditBuffer::from(vec!["some text!\n"]);
+        substitute_cmd(
+            &mut buffer,
+            None,
+            &Regex::new("$").unwrap(),
+            "!",
+            SubstitutionScope::Single(1),
+        )
+        .unwrap();
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
     fn substitute_cmd_current_line_single_first() {
         let mut buffer = EditBuffer::from(vec![
             "one two three four\r\n",
@@ -1394,25 +1413,84 @@ mod tests {
     #[test]
     fn substitute_cmd_multi_line_single() {
         let mut buffer = EditBuffer::from(vec![
-            "one two three four\n",
-            "five six seven eight",
-            "nine ten eleven twelve",
-            "thirteen fourteen fifteen sixteen",
-            "seventeen eighteen nineteen twenty",
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
         ]);
         buffer.set_current_line(5);
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five 'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen 'xteen",
+            "5:'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen 'xteen",
+            "7:nine ten eleven twelve",
+            "8:five 'x seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(8);
         substitute_cmd(
             &mut buffer,
-            Some(Address::span(2, 3)),
-            &Regex::new("e+n").unwrap(),
+            Some(Address::span(2, 9)),
+            &Regex::new("s[aeiou]").unwrap(),
             "'",
-            SubstitutionScope::Single(2),
+            SubstitutionScope::Single(1),
         )
         .unwrap();
-        assert_eq!(
-            buffer[2..4],
-            ["five six seven eight\n", "nine ten elev' twelve\n"]
-        );
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
+    fn undo_redo_substitute_cmd_multi_line_single() {
+        let mut buffer = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five six seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen sixteen",
+            "5:seventeen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen sixteen",
+            "7:nine ten eleven twelve",
+            "8:five six seven eight",
+            "9:one two three four\n",
+        ]);
+        buffer.set_current_line(5);
+        let before = buffer.clone();
+        let mut expected = EditBuffer::from(vec![
+            "1:one two three four\n",
+            "2:five 'x seven eight",
+            "3:nine ten eleven twelve",
+            "4:thirteen fourteen fifteen 'xteen",
+            "5:'venteen eighteen nineteen twenty",
+            "6:thirteen fourteen fifteen 'xteen",
+            "7:nine ten eleven twelve",
+            "8:five 'x seven eight",
+            "9:one two three four\n",
+        ]);
+        expected.set_current_line(8);
+        substitute_cmd(
+            &mut buffer,
+            Some(Address::span(2, 9)),
+            &Regex::new("s[aeiou]").unwrap(),
+            "'",
+            SubstitutionScope::Single(1),
+        )
+        .unwrap();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
+        buffer.do_undo();
+        assert_eq!(buffer.current_line(), before.current_line());
+        assert_eq!(&before[..], &buffer[..]);
+        buffer.do_redo();
+        assert_eq!(buffer.current_line(), expected.current_line());
+        assert_eq!(&buffer[..], &expected[..]);
     }
 
     #[test]
