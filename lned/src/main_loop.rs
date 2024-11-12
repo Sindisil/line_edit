@@ -439,8 +439,7 @@ fn null_cmd(
 ) -> Result<(), Error> {
     match address {
         None => {
-            if buffer.is_empty() || buffer.current_line() == (buffer.len() + 1)
-            {
+            if buffer.is_empty() || buffer.current_line() == buffer.len() {
                 return Err(Error::InvalidAddress);
             }
             print_cmd(
@@ -727,12 +726,14 @@ mod tests {
     }
 
     #[test]
-    fn null_cmd_single_line() {
+    fn null_cmd_no_addr_last_line_gives_error() {
         let mut output = Vec::new();
         let mut buffer = EditBuffer::from(vec!["1\r\n", "2", "3"]);
-        buffer.set_current_line(2);
-        null_cmd(&mut buffer, &mut output, Some(Address::line(3))).unwrap();
-        assert_eq!(&output[..], b"3\r\n");
+        buffer.set_current_line(3);
+        let res = null_cmd(&mut buffer, &mut output, None)
+            .expect_err("invalid address");
+        assert!(matches!(res, Error::InvalidAddress));
+        assert_eq!(buffer.current_line(), 3);
     }
 
     #[test]
@@ -744,6 +745,7 @@ mod tests {
         null_cmd(&mut buffer, &mut output, Some(Address::span(2, 4))).unwrap();
         let output = str::from_utf8(&output[..]).unwrap();
         assert_eq!(output, "4\r\n");
+        assert_eq!(buffer.current_line(), 4);
     }
 
     #[test]
