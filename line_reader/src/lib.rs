@@ -2,6 +2,7 @@ mod edit_buffer;
 mod history_stack;
 mod render_context;
 
+use std::borrow::Cow;
 use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::time::Duration;
@@ -25,8 +26,14 @@ pub trait LineRead {
     /// Will return `io::Error` if an error is encountered reading a line
     fn read_line(
         &mut self,
-        prompt: &str,
+        prompt: &'static str,
         buffer: &mut String,
+    ) -> io::Result<usize>;
+
+    fn read(
+        &mut self,
+        buffer: &mut String,
+        options: &LineReaderOptions,
     ) -> io::Result<usize>;
 }
 
@@ -34,6 +41,12 @@ pub trait LineRead {
 pub struct LineReader {
     buffer: EditBuffer,
     history: Option<HistoryStack>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LineReaderOptions {
+    prompt: Cow<'static, str>,
+    history: bool,
 }
 
 // Non-public structs, enums, and traits
@@ -73,8 +86,8 @@ impl LineReader {
     #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
-        prompt: &str,
         output_buffer: &mut String,
+        options: &LineReaderOptions,
     ) -> io::Result<usize> {
         // ensure terminal is reset to cooked w/visible cursor
         let _terminal_session = TerminalSession {};
@@ -87,7 +100,7 @@ impl LineReader {
             display_height.into(),
             first_display_line.into(),
         );
-        self.buffer.set_prompt(&mut render_ctx, prompt);
+        self.buffer.set_prompt(&mut render_ctx, &options.prompt);
         terminal::enable_raw_mode()?;
         render_ctx.repaint(&self.buffer)?;
 
@@ -143,14 +156,38 @@ impl LineReader {
     }
 }
 
+#[cfg(not(tarpaulin_include))]
 impl LineRead for LineReader {
-    #[cfg(not(tarpaulin_include))]
     fn read_line(
         &mut self,
-        prompt: &str,
+        prompt: &'static str,
         buffer: &mut String,
     ) -> io::Result<usize> {
-        self.accept_line(prompt, buffer)
+        self.accept_line(
+            buffer,
+            &LineReaderOptions { prompt: prompt.into(), ..Default::default() },
+        )
+    }
+
+    fn read(
+        &mut self,
+        buffer: &mut String,
+        options: &LineReaderOptions,
+    ) -> io::Result<usize> {
+        self.accept_line(buffer, options)
+    }
+}
+
+// impls for LineReaderOptions
+impl LineReaderOptions {
+    fn new() -> Self {
+        LineReaderOptions { ..Default::default() }
+    }
+}
+
+impl Default for LineReaderOptions {
+    fn default() -> Self {
+        LineReaderOptions { prompt: "".into(), history: true }
     }
 }
 
@@ -188,6 +225,14 @@ where
         &mut self,
         _prompt: &str,
         buffer: &mut String,
+    ) -> io::Result<usize> {
+        BufRead::read_line(self, buffer)
+    }
+
+    fn read(
+        &mut self,
+        buffer: &mut String,
+        _options: &LineReaderOptions,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }
