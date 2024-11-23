@@ -30,6 +30,9 @@ pub trait LineRead {
         buffer: &mut String,
     ) -> io::Result<usize>;
 
+    /// # Errors
+    ///
+    /// Will return `io::Error` if an error is encountered reading a line
     fn read(
         &mut self,
         buffer: &mut String,
@@ -45,8 +48,8 @@ pub struct LineReader {
 
 #[derive(Debug, Clone)]
 pub struct LineReaderOptions {
-    prompt: Cow<'static, str>,
-    history: bool,
+    pub prompt: Cow<'static, str>,
+    pub history: bool,
 }
 
 // Non-public structs, enums, and traits
@@ -78,9 +81,8 @@ impl Default for LineReader {
 
 impl LineReader {
     #[must_use]
-    pub fn new(history: bool) -> LineReader {
-        let history = if history { Some(HistoryStack::new()) } else { None };
-        LineReader { history, ..Default::default() }
+    pub fn new() -> LineReader {
+        LineReader { ..Default::default() }
     }
 
     #[cfg(not(tarpaulin_include))]
@@ -103,6 +105,14 @@ impl LineReader {
         self.buffer.set_prompt(&mut render_ctx, &options.prompt);
         terminal::enable_raw_mode()?;
         render_ctx.repaint(&self.buffer)?;
+
+        // instantiate and/or get history stack, if necessary
+        let history = if options.history {
+            self.history.get_or_insert_with(HistoryStack::new);
+            &mut self.history
+        } else {
+            &mut None
+        };
 
         let mut res = ControlFlow::Continue(());
         while res.is_continue() {
@@ -133,7 +143,7 @@ impl LineReader {
             res = handle_event(
                 &mut self.buffer,
                 &mut render_ctx,
-                self.history.as_mut(),
+                history.as_mut(),
                 &event,
             );
             if !matches!(event, Event::Resize(..)) {
@@ -180,7 +190,8 @@ impl LineRead for LineReader {
 
 // impls for LineReaderOptions
 impl LineReaderOptions {
-    fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         LineReaderOptions { ..Default::default() }
     }
 }

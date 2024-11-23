@@ -10,6 +10,7 @@ use unicode_segmentation::Graphemes;
 use unicode_segmentation::UnicodeSegmentation;
 
 use line_reader::LineRead;
+use line_reader::LineReaderOptions;
 
 use crate::edit_buffer::EditBuffer;
 use crate::iter_utils::Peeking;
@@ -272,10 +273,12 @@ impl Cmd {
         input: &mut impl LineRead,
         buf: &mut Vec<String>,
     ) -> Result<usize, io::Error> {
+        let text_read_options =
+            LineReaderOptions { history: false, ..Default::default() };
         buf.clear();
         loop {
             let mut line = String::new();
-            let n = input.read_line("", &mut line)?;
+            let n = input.read(&mut line, &text_read_options)?;
             if n == 0 || line == ".\n" || line == ".\r\n" {
                 return Ok(buf.len());
             }
@@ -289,9 +292,11 @@ impl Cmd {
         buffer: &mut EditBuffer,
         previous_pattern: &mut Option<Regex>,
     ) -> Result<Cmd, Error> {
+        let cmd_read_options =
+            LineReaderOptions { prompt: ":".into(), ..Default::default() };
         let mut line = String::with_capacity(120);
         input
-            .read_line(":", &mut line)
+            .read(&mut line, &cmd_read_options)
             .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.as_str().graphemes(true).peekable();
         let address = Address::eval(&mut graphemes, buffer, previous_pattern)?;
@@ -478,10 +483,12 @@ pub(crate) fn parse_substitute_cmd(
         return Ok(Cmd::Substitute(address, pattern, replacement, scope));
     }
 
+    let added_line_read_options =
+        LineReaderOptions { prompt: "".into(), ..Default::default() };
     let mut line = String::new();
     let cmd = loop {
         input
-            .read_line("", &mut line)
+            .read(&mut line, &added_line_read_options)
             .map_err(|source| Error::ReadCommand { source })?;
         let mut graphemes = line.graphemes(true).peekable();
         let more_lines = parse_replacement_line(
