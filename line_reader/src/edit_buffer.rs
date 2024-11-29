@@ -20,7 +20,7 @@ impl EditBuffer {
         EditBuffer { ..Default::default() }
     }
 
-    pub fn set_prompt(&mut self, render_ctx: &mut RenderContext, prompt: &str) {
+    pub fn reset(&mut self, render_ctx: &mut RenderContext, prompt: &str) {
         let prompt_line =
             BufferLine { text: prompt.to_owned(), width: prompt.width() };
         self.input_start = (0, prompt_line.text.len()).into();
@@ -41,6 +41,10 @@ impl EditBuffer {
             .flat_map(|l| l.text.chars())
             .take(self.prompt_char_count)
             .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -70,6 +74,7 @@ impl EditBuffer {
             .flat_map(|l| l.text.chars())
             .skip(self.prompt_char_count)
     }
+
     /// Reflow buffer lines to fit `display_width`, and
     /// snap cursor location to within viewport.
     /// Also might result in setting scroll needed.
@@ -96,17 +101,10 @@ impl EditBuffer {
                         render_ctx.cursor.column = 0;
                         render_ctx.cursor.index.line += 1;
                         render_ctx.cursor.index.offset = 0;
-                        if render_ctx.cursor.index.line == self.lines.len() {
-                            self.lines.push(BufferLine::new());
-                        }
                     }
                     tl_idx += 1;
                 }
             }
-        }
-
-        if self.lines.last().unwrap().width == render_ctx.display_width {
-            self.lines.push(BufferLine::new());
         }
 
         render_ctx.adjust_viewport(self);
@@ -289,9 +287,21 @@ impl EditBuffer {
     }
 }
 
+impl Default for EditBuffer {
+    fn default() -> EditBuffer {
+        EditBuffer {
+            lines: Vec::new(),
+            prompt_char_count: 0,
+            input_start: (0, 0).into(),
+            draft: None,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct BufferLine {
     pub(crate) text: String,
+    // Display width, in columns, including wide glyphs
     pub(crate) width: usize,
 }
 
@@ -312,9 +322,12 @@ impl From<&str> for BufferLine {
     }
 }
 
+// Location within edit buffer
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct BufferIndex {
+    // [0, buffer.len())
     pub line: usize,
+    // Byte offset within line [0, buf[line].len())
     pub offset: usize,
 }
 

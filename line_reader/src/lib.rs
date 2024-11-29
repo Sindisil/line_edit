@@ -13,6 +13,7 @@ use crossterm::terminal;
 use crossterm::ExecutableCommand;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::edit_buffer::BufferLine;
 use crate::edit_buffer::EditBuffer;
 use crate::history_stack::HistoryStack;
 use crate::render_context::RenderContext;
@@ -102,7 +103,7 @@ impl LineReader {
             display_height.into(),
             first_display_line.into(),
         );
-        self.buffer.set_prompt(&mut render_ctx, &options.prompt);
+        self.buffer.reset(&mut render_ctx, &options.prompt);
         terminal::enable_raw_mode()?;
         render_ctx.repaint(&self.buffer)?;
 
@@ -211,17 +212,6 @@ impl Drop for TerminalSession {
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
         let _ = io::stdout().execute(Show);
-    }
-}
-
-impl Default for EditBuffer {
-    fn default() -> EditBuffer {
-        EditBuffer {
-            lines: vec!["".into()],
-            prompt_char_count: 0,
-            input_start: (0, 0).into(),
-            draft: None,
-        }
     }
 }
 
@@ -421,6 +411,7 @@ fn handle_char_input(
     c: char,
 ) -> ControlFlow<bool> {
     let c_width = c.width().unwrap_or(0);
+
     // if char is zero width, but no previous chars exist to
     //  which it can  be combined, do nothing (i.e., don't accept
     // the input)
@@ -429,6 +420,10 @@ fn handle_char_input(
     }
 
     // insert new char at curser and let reflow sort it out
+    assert!(render_ctx.cursor.index.line <= buffer.len());
+    if render_ctx.cursor.index.line == buffer.len() {
+        buffer.lines.push(BufferLine::new());
+    }
     buffer.lines[render_ctx.cursor.index.line]
         .text
         .insert(render_ctx.cursor.index.offset, c);
@@ -511,6 +506,7 @@ fn handle_right(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
 ) -> ControlFlow<bool> {
+    // If aleady at end, nothing to do
     if render_ctx.cursor.index
         == (buffer.lines.len() - 1, buffer.lines.last().unwrap().text.len())
             .into()
@@ -518,21 +514,33 @@ fn handle_right(
         return ControlFlow::Continue(());
     }
 
-    if let Some((i, _)) = buffer.lines[render_ctx.cursor.index.line].text
-        [render_ctx.cursor.index.offset..]
+    let cursor_index = render_ctx.cursor.index;
+    let cur_char_width = buffer.lines[cursor_index.line].text
+        [cursor_index.offset..]
+        .chars()
+        .next()
+        .and_then(UnicodeWidthChar::width)
+        .unwrap();
+    let cur_char_index = buffer.lines[cursor_index.line].text
+        [cursor_index.offset..]
         .char_indices()
         .skip(1)
         .find(|(_, c)| c.width().unwrap_or(0) > 0)
+        .map(|(i, _)| i);
+    if cur_char_index.is_some()
+        || (cursor_index.line == buffer.len() - 1
+            && render_ctx.cursor.column + cur_char_width
+                < render_ctx.display_width)
     {
-        let cur_char_width = buffer.lines[render_ctx.cursor.index.line].text
-            [render_ctx.cursor.index.offset..]
-            .chars()
-            .next()
-            .and_then(UnicodeWidthChar::width)
-            .unwrap();
         render_ctx.cursor.column += cur_char_width;
-        render_ctx.cursor.index.offset += i;
+        if let Some(i) = cur_char_index {
+            render_ctx.cursor.index.offset += i;
+        } else {
+            render_ctx.cursor.index.offset =
+                buffer.lines[cursor_index.line].len();
+        }
     } else {
+        // no; move to first cell on next display line
         render_ctx.cursor.line += 1;
         render_ctx.cursor.column = 0;
         render_ctx.cursor.index.line += 1;
@@ -809,10 +817,8 @@ mod tests {
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
-        let expected_buf = EditBuffer {
-            lines: vec![":1234567🎸".into(), "".into()],
-            ..buf.clone()
-        };
+        let expected_buf =
+            EditBuffer { lines: vec![":1234567🎸".into()], ..buf.clone() };
         let expected_ctx = RenderContext {
             cursor: Cursor { column: 0, line: 1, index: (1, 0).into() },
             ..ctx
@@ -934,7 +940,7 @@ mod tests {
             ..Default::default()
         };
         let expected_buf = EditBuffer {
-            lines: vec![":12345678".into(), "🎸2345678a".into(), "".into()],
+            lines: vec![":12345678".into(), "🎸2345678a".into()],
             ..buf.clone()
         };
         let expected_ctx = RenderContext {
@@ -982,7 +988,6 @@ mod tests {
                 "0123456789".into(),
                 "012345678".into(),
                 "🎸2345678a".into(),
-                "".into(),
             ],
             ..buf.clone()
         };
@@ -1075,7 +1080,6 @@ mod tests {
                 "012345678a".into(),
                 "9012345678".into(),
                 "9012345678".into(),
-                "".into(),
             ],
             ..buf.clone()
         };
@@ -1503,10 +1507,10 @@ mod tests {
     }
 
     #[test]
-    fn right_moves_cursor_to_next_base_char() {
+    fn right_moves_cursor_to_next_base_char_until_end() {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
-        let mut buf = make_buf(&["aë🎸ou"], ':');
+        let mut buf = make_buf(&["aë🎸o"], ':');
         let mut ctx = RenderContext {
             display_width: 10,
             display_height: 5,
@@ -1534,6 +1538,15 @@ mod tests {
 
         let expected_ctx = RenderContext {
             cursor: Cursor { column: 5, line: 0, index: (0, 9).into() },
+            ..ctx
+        };
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(res.is_continue());
+        assert_eq!(buf, expected_buf);
+        assert_eq!(ctx, expected_ctx);
+
+        let expected_ctx = RenderContext {
+            cursor: Cursor { column: 6, line: 0, index: (0, 10).into() },
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
