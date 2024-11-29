@@ -286,7 +286,7 @@ impl EditBuffer {
 impl Default for EditBuffer {
     fn default() -> EditBuffer {
         EditBuffer {
-            lines: vec!["".into()],
+            lines: Vec::new(),
             prompt_char_count: 0,
             input_start: (0, 0).into(),
             draft: None,
