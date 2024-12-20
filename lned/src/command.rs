@@ -693,6 +693,34 @@ fn parse_file_cmd<'a>(
     }
 }
 
+fn parse_global_command_line(
+    graphemes: &mut Peekable<Graphemes<'_>>,
+    cmd_line: &mut String,
+) -> Result<bool, Error> {
+    Ok(loop {
+        match graphemes.next() {
+            None => break false,
+            Some("\\") => {
+                let escaped =
+                    graphemes.next().ok_or(Error::TrailingBackslash)?;
+                if escaped == "\n" || escaped == "\r\n" {
+                    cmd_line.push_str(escaped);
+                    break true;
+                }
+
+                    cmd_line.push('\\');
+                    cmd_line.push_str(escaped);
+            }
+            Some(gr) => {
+                cmd_line.push_str(gr);
+                if gr == "\r\n" || gr == "\n" {
+                    break false;
+                }
+            }
+        }
+    })
+}
+
 fn parse_global_cmd(
     graphemes: &mut Peekable<Graphemes<'_>>,
     address: Option<Address>,
@@ -706,31 +734,25 @@ fn parse_global_cmd(
     let pattern = previous_pattern.clone().ok_or(Error::NoPreviousPattern)?;
 
     let mut commands = String::new();
-    let mut more_lines = false;
 
     // Copy first command to commands string,
     // noting and unescaping escaped EOL.
-    while let Some(gr) = graphemes.next() {
-        if gr == "\\" && matches!(graphemes.peek(), Some(&"\n" | &"\r\n")) {
-            more_lines = true;
-        } else {
-            commands.push_str(gr);
-            if gr == "\n" || gr == "\r\n" {
-                break;
-            }
-        }
-    }
+    let mut more_lines = parse_global_command_line(graphemes, &mut commands)?;
 
-    // if the EOL was escaped, use read_input_lines() to read in rest of command list
+    // if the EOL was escaped, use read_input_lines()
+    // to read in rest of command list
     if more_lines {
-        let mut lines = Vec::new();
-        if Cmd::read_input_lines(input, &mut lines)
-            .map_err(|source| Error::ReadCommand { source })?
-            > 0
-        {
-            for line in lines {
-                commands.push_str(&line);
-            }
+        let line_read_options =
+            LineReaderOptions { prompt: "".into(), ..Default::default() };
+        let mut line = String::new();
+        while more_lines {
+            input
+                .read(&mut line, &line_read_options)
+                .map_err(|source| Error::ReadCommand { source })?;
+            let mut graphemes = line.graphemes(true).peekable();
+            more_lines =
+                parse_global_command_line(&mut graphemes, &mut commands)?;
+            line.clear();
         }
     }
 
@@ -776,56 +798,56 @@ mod tests {
     #[test]
     fn parse_no_args_p_print_suffix() {
         let mut cmd_line = "p\r\n".graphemes(true).peekable();
-        let (_cmd, _sfx) =
+        let (cmd, sfx) =
             parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(Cmd::Delete(None), _cmd));
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(cmd, Cmd::Delete(None)));
+        assert!(matches!(sfx, Some(PrintSuffix::Print)));
     }
 
     #[test]
     fn parse_no_args_n_print_suffix() {
         let mut cmd_line = "n\r\n".graphemes(true).peekable();
-        let (_cmd, _sfx) =
+        let (cmd, sfx) =
             parse_no_args(&mut cmd_line, Cmd::Delete(None)).unwrap();
-        assert!(matches!(Cmd::Delete(None), _cmd));
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(cmd, Cmd::Delete(None)));
+        assert!(matches!(sfx, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
     fn parse_no_args_extra_chars_after_print_suffix_error() {
         let mut cmd_line = "n!\r\n".graphemes(true).peekable();
-        let _res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
             .expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_no_args_multiple_print_suffix_error() {
         let mut cmd_line = "pn\r\n".graphemes(true).peekable();
-        let _res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
+        let res = parse_no_args(&mut cmd_line, Cmd::Delete(None))
             .expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
     fn parse_print_suffix_p() {
         let mut graphs = "p\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(Some(PrintSuffix::Print), _res));
+        let res = parse_print_suffix(&mut graphs).unwrap();
+        assert!(matches!(res, Some(PrintSuffix::Print)));
     }
 
     #[test]
     fn parse_print_suffix_n() {
         let mut graphs = "n\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).unwrap();
-        assert!(matches!(Some(PrintSuffix::Enumerate), _res));
+        let res = parse_print_suffix(&mut graphs).unwrap();
+        assert!(matches!(res, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
     fn parse_print_suffix_trailing_chars_error() {
         let mut graphs = "pn\r\n".graphemes(true).peekable();
-        let _res = parse_print_suffix(&mut graphs).expect_err("invalid suffix");
-        assert!(matches!(Error::InvalidCmdSuffix, _res));
+        let res = parse_print_suffix(&mut graphs).expect_err("invalid suffix");
+        assert!(matches!(res, Error::InvalidCmdSuffix));
     }
 
     #[test]
@@ -1577,8 +1599,12 @@ mod tests {
             &mut "".as_bytes(),
         )
         .unwrap();
-        assert!(matches!(cmd,
-            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == "p\r\n"));
+        let Cmd::Global(addr, pat, cmds) = cmd else {
+            panic!("{cmd:?} not Cmd::Global!");
+        };
+        assert!(addr.is_none());
+        assert_eq!(pat.as_str(), "pat");
+        assert_eq!(cmds, "p\r\n");
         assert!(sfx.is_none());
     }
 
@@ -1594,8 +1620,12 @@ mod tests {
             &mut more_input,
         )
         .unwrap();
-        assert!(matches!(cmd,
-            Cmd::Global(a, p, c) if a.is_none() && p.as_str() == "pat" && c == "n\r\nd\r\n"));
+        let Cmd::Global(addr, pat, cmds) = cmd else {
+            panic!("{cmd:?} not Cmd::Global!");
+        };
+        assert!(addr.is_none());
+        assert_eq!(pat.as_str(), "pat");
+        assert_eq!(cmds, "n\r\nd\r\n");
         assert!(sfx.is_none());
     }
 
@@ -1604,7 +1634,7 @@ mod tests {
         let mut cmd_line = "/[^01]*/./n\r\n".graphemes(true).peekable();
         let address = Some(Address::span(1, 10));
         let mut prev_pattern = None;
-        let (cmd, _sfx) = parse_substitute_cmd(
+        let (cmd, sfx) = parse_substitute_cmd(
             &mut cmd_line,
             address,
             &mut prev_pattern,
@@ -1617,7 +1647,7 @@ mod tests {
         assert_eq!(a, address);
         assert_eq!(p.as_str(), "[^01]*");
         assert_eq!(r, ".");
-        assert!(matches!(Some(PrintSuffix::Enumerate), _sfx));
+        assert!(matches!(sfx, Some(PrintSuffix::Enumerate)));
     }
 
     #[test]
