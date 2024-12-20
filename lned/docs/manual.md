@@ -217,8 +217,6 @@ If the buffer has changed since the last time the entire buffer has been
 written, the user will be warned. As with the quit command, a second
 successive edit command will proceed, even if the buffer has been changed.
 
-An 'e' command may be undone.
-
 ### Enumerate ('n')
 
 #### Syntax

@@ -317,6 +317,7 @@ fn edit_cmd(
         output.flush().unwrap();
         writeln!(output, "missing line terminator appended").unwrap();
     }
+buffer.set_current_line(buffer.len());
     Ok(())
 }
 
