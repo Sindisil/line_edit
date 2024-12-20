@@ -131,32 +131,38 @@ pub fn run(
     while !done {
         Cmd::read(&mut input, &mut buffer, &mut previous_pattern)
             .map_err(Error::ParseCmd)
-            .and_then(|(cmd, sfx)| {
-                let res = dispatch_cmd(
-                    &cmd,
-                    &mut buffer,
-                    &mut output,
-                    &mut input,
-                    &mut previous_cmd,
-                    &mut previous_pattern,
-                );
-                previous_cmd = Some(cmd);
-                res.and_then(|exit| {
-                    done = exit;
-                    let cur_line_addr =
-                        Some(Address::line(buffer.current_line()));
-                    match sfx {
-                        Some(PrintSuffix::Print) => {
-                            print_cmd(&mut buffer, &mut output, cur_line_addr)
+            .and_then(|res| {
+                if let Some((cmd, sfx)) = res {
+                    let res = dispatch_cmd(
+                        &cmd,
+                        &mut buffer,
+                        &mut output,
+                        &mut input,
+                        &mut previous_cmd,
+                        &mut previous_pattern,
+                    );
+                    previous_cmd = Some(cmd);
+                    res.and_then(|exit| {
+                        done = exit;
+                        let cur_line_addr =
+                            Some(Address::line(buffer.current_line()));
+                        match sfx {
+                            Some(PrintSuffix::Print) => print_cmd(
+                                &mut buffer,
+                                &mut output,
+                                cur_line_addr,
+                            ),
+                            Some(PrintSuffix::Enumerate) => enumerate_cmd(
+                                &mut buffer,
+                                &mut output,
+                                cur_line_addr,
+                            ),
+                            None => Ok(()),
                         }
-                        Some(PrintSuffix::Enumerate) => enumerate_cmd(
-                            &mut buffer,
-                            &mut output,
-                            cur_line_addr,
-                        ),
-                        None => Ok(()),
-                    }
-                })
+                    })
+                } else {
+                    Ok(())
+                }
             })
             .or_else(|e| {
                 writeln!(output, "{e}").unwrap();
@@ -317,7 +323,7 @@ fn edit_cmd(
         output.flush().unwrap();
         writeln!(output, "missing line terminator appended").unwrap();
     }
-buffer.set_current_line(buffer.len());
+    buffer.set_current_line(buffer.len());
     Ok(())
 }
 
@@ -394,8 +400,11 @@ fn global_cmd(
         let mut input = commands.as_bytes();
 
         // parse and execute command list for line
-        let (cmd, sfx) = Cmd::read(&mut input, buffer, previous_pattern)
+        let cmd_line = Cmd::read(&mut input, buffer, previous_pattern)
             .map_err(|source| Error::ReadGlobalCmd { source })?;
+        let Some((cmd, sfx)) = cmd_line else {
+            continue;
+        };
         match cmd {
             Cmd::Enumerate(address) => enumerate_cmd(buffer, output, address)?,
             Cmd::Global(..) => return Err(Error::NestedGlobalCmd),
@@ -1044,6 +1053,33 @@ mod tests {
     }
 
     #[test]
+    fn global_cmd_delete() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        let expected = EditBuffer::from(vec!["two\n", "four", "six"]);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "n\nd\n".to_owned();
+        global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 6)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        )
+        .unwrap();
+        eprintln!("{}", str::from_utf8(&output[..]).unwrap());
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "1  one\n3  three\n5  five\n"
+        );
+        assert_eq!(&buffer[..], &expected[..]);
+    }
+
+    #[test]
     fn global_cmd_unsupported_commands() {
         let mut buffer = EditBuffer::from(vec!["one\r\n", "two", "three"]);
         buffer.set_current_line(1);
@@ -1467,7 +1503,7 @@ mod tests {
         buffer.set_current_line(1);
         let cmd_line = "s/, /\\\r\n/";
         let mut input = cmd_line.as_bytes();
-        let (Cmd::Substitute(address, pattern, replacement, scope), None) =
+        let Some((Cmd::Substitute(address, pattern, replacement, scope), None)) =
             Cmd::read(&mut input, &mut buffer, &mut None).unwrap()
         else {
             panic!("{cmd_line} didn't parse as Cmd::Substitute");
@@ -1491,13 +1527,15 @@ mod tests {
         buffer.set_current_line(1);
         let mut cmd_line = "/, /\\\n".graphemes(true).peekable();
         let mut input = "\n".as_bytes();
-        let Ok((Cmd::Substitute(address, pattern, replacement, scope), None)) =
-            command::parse_substitute_cmd(
-                &mut cmd_line,
-                None,
-                &mut None,
-                &mut input,
-            )
+        let Ok(Some((
+            Cmd::Substitute(address, pattern, replacement, scope),
+            None,
+        ))) = command::parse_substitute_cmd(
+            &mut cmd_line,
+            None,
+            &mut None,
+            &mut input,
+        )
         else {
             panic!("should have parsed to Cmd::Substitute!");
         };
