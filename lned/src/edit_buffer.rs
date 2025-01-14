@@ -435,7 +435,6 @@ impl EditBuffer {
         let Some(undo) = self.undo_stack.pop_undo() else {
             return Err(Error::NothingToUndo);
         };
-        eprintln!("do_undo: {undo:?}");
         for change in undo.changes().rev() {
             self.current_line = change.current_line_after;
             for diff in change.diffs().rev() {
@@ -459,8 +458,6 @@ impl EditBuffer {
         let Some(redo) = self.undo_stack.pop_redo() else {
             return Err(Error::NothingToRedo);
         };
-        eprintln!("do_redo: cl before {}", self.current_line);
-        eprintln!("do_redo: {redo:?}");
         for change in redo.changes() {
             self.current_line = change.current_line_before;
             for diff in change.diffs() {
@@ -857,23 +854,19 @@ mod tests {
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        eprintln!("\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        eprintln!("\tredo");
         buffer.do_redo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        eprintln!("\tundo the redo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
         let expected3 = EditBuffer::from(vec!["1\n", "2", "3", "4", "5", "6"]);
-        eprintln!("\n\n\tsecond change command");
         buffer.do_change(
             Some(Address::span(2, 3)),
             expected3[2..].to_vec(),
@@ -882,23 +875,19 @@ mod tests {
         assert_eq!(buffer[..], expected3[..]);
         assert_eq!(buffer.current_line(), 6);
 
-        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
 
-        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected2[..]);
         assert_eq!(buffer.current_line(), 7);
 
-        eprintln!("\n\tundo");
         buffer.do_undo().unwrap();
         assert_eq!(buffer[..], expected1[..]);
         assert_eq!(buffer.current_line(), 3);
         assert!(buffer.is_dirty());
 
-        eprintln!("\n\tlast undo");
         buffer.do_undo().unwrap();
         assert!(buffer.is_empty());
         assert_eq!(buffer[..], orig[..]);
