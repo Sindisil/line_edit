@@ -469,7 +469,7 @@ fn parse_replacement_line(
                     replacement.push_str(escaped);
                     break true;
                 }
-                if escaped != delimiter {
+                if escaped != delimiter && escaped != "\\" {
                     replacement.push('\\');
                 }
                 replacement.push_str(escaped);
