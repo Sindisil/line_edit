@@ -622,7 +622,7 @@ fn list_cmd(
                 gr => gr,
             })
             .collect();
-        output.write_all(format!("{expanded}").as_bytes()).unwrap();
+        output.write_all(expanded.as_bytes()).unwrap();
     }
     output.flush().unwrap();
     Ok(None)
@@ -676,7 +676,7 @@ fn print_cmd(
 
     buffer.set_current_line(*span.end());
     for l in &buffer[span] {
-        output.write_all(format!("{l}").as_bytes()).unwrap();
+        output.write_all(l.as_bytes()).unwrap();
     }
     output.flush().unwrap();
     Ok(None)
