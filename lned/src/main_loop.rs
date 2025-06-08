@@ -1342,7 +1342,7 @@ mod tests {
         ]);
         let orig = buffer.clone();
         let expected = EditBuffer::from(vec![
-            "change 1", "change 2", "change 3", "two", "two", "change 1",
+            "change 1\n", "change 2", "change 3", "two", "two", "change 1",
             "change 2", "change 3", "four", "four", "five", "five", "six",
             "six",
         ]);
