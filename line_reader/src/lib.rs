@@ -3,7 +3,6 @@ mod history_stack;
 mod render_context;
 
 use std::io::{self, BufRead, Write};
-use std::ops::ControlFlow;
 use std::time::Duration;
 
 use crossterm::ExecutableCommand;
@@ -15,9 +14,6 @@ use crate::edit_buffer::BufferLine;
 use crate::edit_buffer::EditBuffer;
 use crate::history_stack::HistoryStack;
 use crate::render_context::RenderContext;
-
-// Public structs, enums, and traits
-///////////
 
 pub trait LineRead {
     /// # Errors
@@ -51,22 +47,17 @@ pub struct LineReaderOptions {
     pub history: bool,
 }
 
-// Non-public structs, enums, and traits
-///////////////
-
-// public functions
-////////
+#[derive(Debug)]
+enum EventResult {
+    Accept,   // Accept line and return
+    Continue, // Continue without repainting display
+    Repaint,  // Continue after repainting display
+}
 
 #[must_use]
 pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
-
-// Non-public functions
-////////
-
-// impls for LineReader
-////////
 
 impl Default for LineReader {
     fn default() -> LineReader {
@@ -109,8 +100,8 @@ impl LineReader {
             &mut None
         };
 
-        let mut res = ControlFlow::Continue(());
-        while res.is_continue() {
+        let mut res = EventResult::Continue;
+        while !(matches!(res, EventResult::Accept)) {
             let event = match event::read()? {
                 Event::Resize(mut x, mut y) => {
                     let c_pos = cursor::position()?;
@@ -153,9 +144,7 @@ impl LineReader {
         stdout.flush()?;
 
         let prev_bytes = output_buffer.len();
-        if let Some(true) = res.break_value() {
-            output_buffer.extend(self.buffer.input_chars());
-        }
+        output_buffer.extend(self.buffer.input_chars());
         output_buffer.push_str(native_eol());
         Ok(output_buffer.len() - prev_bytes)
     }
@@ -197,9 +186,6 @@ impl Default for LineReaderOptions {
     }
 }
 
-// impls for RenderContext
-////////
-
 struct TerminalSession {}
 impl Drop for TerminalSession {
     #[cfg(not(tarpaulin_include))]
@@ -208,9 +194,6 @@ impl Drop for TerminalSession {
         let _ = io::stdout().execute(Show);
     }
 }
-
-// impls of LineRead
-////////
 
 impl<T> LineRead for T
 where
@@ -238,13 +221,13 @@ fn handle_event(
     render_ctx: &mut RenderContext,
     history: Option<&mut HistoryStack>,
     event: &Event,
-) -> ControlFlow<bool> {
+) -> EventResult {
     match event {
         Event::Key(event) if event.kind == KeyEventKind::Press => {
             handle_key_event(buffer, render_ctx, history, event)
         }
         Event::Resize(x, y) => handle_resize_event(buffer, render_ctx, *x, *y),
-        _ => ControlFlow::Continue(()),
+        _ => EventResult::Continue,
     }
 }
 
@@ -253,7 +236,7 @@ fn handle_resize_event(
     render_ctx: &mut RenderContext,
     x: u16,
     y: u16,
-) -> ControlFlow<bool> {
+) -> EventResult {
     let old_width = render_ctx.display_width;
     let old_height = render_ctx.display_height;
     render_ctx.display_width = x.into();
@@ -269,7 +252,7 @@ fn handle_resize_event(
         render_ctx.scroll_needed =
             render_ctx.scroll_needed.saturating_sub(h_diff);
     }
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_key_event(
@@ -277,7 +260,7 @@ fn handle_key_event(
     render_ctx: &mut RenderContext,
     history: Option<&mut HistoryStack>,
     event: &KeyEvent,
-) -> ControlFlow<bool> {
+) -> EventResult {
     match event.code {
         KeyCode::Enter => {
             if let Some(history) = history {
@@ -290,7 +273,7 @@ fn handle_key_event(
                     history.push(buffer.input_chars().collect());
                 }
             }
-            ControlFlow::Break(true)
+            EventResult::Accept
         }
         KeyCode::Left => handle_left(buffer, render_ctx),
         KeyCode::Right => handle_right(buffer, render_ctx),
@@ -303,7 +286,7 @@ fn handle_key_event(
         KeyCode::Down => handle_down(buffer, render_ctx, history),
         KeyCode::Esc => handle_esc(buffer, render_ctx, history),
         KeyCode::Tab => handle_char_input(buffer, render_ctx, '\t'),
-        _ => ControlFlow::Continue(()),
+        _ => EventResult::Continue,
     }
 }
 
@@ -311,21 +294,21 @@ fn handle_esc(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
+) -> EventResult {
     buffer.set_from_draft(render_ctx);
     if let Some(history) = history {
         history.rewind();
     }
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_down(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
+) -> EventResult {
     let Some(history) = history else {
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     };
     if let Some((cur_a, &mut ref mut cur_e)) = history.current() {
         // If buffer differs from current edited (if any) or else
@@ -340,7 +323,7 @@ fn handle_down(
         }
     } else {
         // Not viewing history, nothing to do
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     }
 
     // Advance to next newer history.
@@ -355,16 +338,16 @@ fn handle_down(
         buffer.set_from_draft(render_ctx);
     }
 
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_up(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
     history: Option<&mut HistoryStack>,
-) -> ControlFlow<bool> {
+) -> EventResult {
     let Some(history) = history else {
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     };
     // If no older history to view, nothing to do
     if !history.is_at_bottom() {
@@ -398,14 +381,14 @@ fn handle_up(
             edited.as_ref().map_or(accepted, |e| e.as_str()),
         );
     }
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_char_input(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
     c: char,
-) -> ControlFlow<bool> {
+) -> EventResult {
     // if char is zero width, but no previous chars exist to
     //  which it can  be combined, do nothing (i.e., don't accept
     // the input)
@@ -431,7 +414,7 @@ fn handle_char_input(
             .take_while(|c| *c != '\t')
             .any(|c| edit_buffer::char_width(c, 0) > 0)
         {
-            return ControlFlow::Continue(());
+            return EventResult::Continue;
         }
     }
 
@@ -447,21 +430,22 @@ fn handle_char_input(
     // catching case where new char fits on previous line
     buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
 
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_backspace(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
+) -> EventResult {
     if render_ctx.cursor == buffer.input_start {
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     }
 
     if render_ctx.cursor.offset == 0 {
         render_ctx.cursor.line -= 1;
         render_ctx.cursor.offset = buffer.lines[render_ctx.cursor.line].len();
     }
+
     if let Some((i, _)) = buffer.lines[render_ctx.cursor.line]
         [..render_ctx.cursor.offset]
         .char_indices()
@@ -471,17 +455,17 @@ fn handle_backspace(
         render_ctx.cursor.offset = i;
     }
     buffer.reflow(render_ctx, render_ctx.cursor.line.saturating_sub(1));
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_left(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
+) -> EventResult {
     use unicode_width::UnicodeWidthChar;
 
     if render_ctx.cursor == buffer.input_start {
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     }
 
     if render_ctx.cursor.offset == 0 {
@@ -498,18 +482,18 @@ fn handle_left(
     }
 
     render_ctx.adjust_viewport(buffer);
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_right(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
+) -> EventResult {
     // If aleady at end, nothing to do
     if render_ctx.cursor
         == (buffer.lines.len() - 1, buffer.lines.last().unwrap().len()).into()
     {
-        return ControlFlow::Continue(());
+        return EventResult::Continue;
     }
 
     let width_before_next_cursor = edit_buffer::str_width(
@@ -539,54 +523,60 @@ fn handle_right(
     }
 
     render_ctx.adjust_viewport(buffer);
-    ControlFlow::Continue(())
+    EventResult::Repaint
 }
 
 fn handle_delete(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    // if at end of buffer, nothing to do
-    if render_ctx.cursor != buffer.buffer_end() {
-        use unicode_width::UnicodeWidthChar;
+) -> EventResult {
+    use unicode_width::UnicodeWidthChar;
 
-        let (cur_line, cur_offset) = render_ctx.cursor.into();
-        let next_c_offset = buffer.lines[cur_line][cur_offset..]
-            .char_indices()
-            .skip(1)
-            .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
-            .map_or_else(
-                || buffer.lines[cur_line].len(),
-                |(i, _)| i + cur_offset,
-            );
-        buffer.lines[cur_line].replace_range(cur_offset..next_c_offset, "");
-        buffer.reflow(render_ctx, cur_line.saturating_sub(1));
+    // if at end of buffer, nothing to do
+    if render_ctx.cursor == buffer.buffer_end() {
+        return EventResult::Continue;
     }
-    ControlFlow::Continue(())
+
+    let (cur_line, cur_offset) = render_ctx.cursor.into();
+    let next_c_offset = buffer.lines[cur_line][cur_offset..]
+        .char_indices()
+        .skip(1)
+        .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
+        .map_or_else(|| buffer.lines[cur_line].len(), |(i, _)| i + cur_offset);
+    buffer.lines[cur_line].replace_range(cur_offset..next_c_offset, "");
+    buffer.reflow(render_ctx, cur_line.saturating_sub(1));
+
+    EventResult::Repaint
 }
 
 fn handle_home(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
-    if render_ctx.cursor != buffer.input_start {
-        render_ctx.first_buffer_line = 0;
-        render_ctx.cursor = buffer.input_start;
-        render_ctx.adjust_viewport(buffer);
+) -> EventResult {
+    if render_ctx.cursor == buffer.input_start {
+        return EventResult::Continue;
     }
-    ControlFlow::Continue(())
+
+    render_ctx.first_buffer_line = 0;
+    render_ctx.cursor = buffer.input_start;
+    render_ctx.adjust_viewport(buffer);
+
+    EventResult::Repaint
 }
 
 fn handle_end(
     buffer: &mut EditBuffer,
     render_ctx: &mut RenderContext,
-) -> ControlFlow<bool> {
+) -> EventResult {
     let buffer_end = buffer.buffer_end();
-    if render_ctx.cursor < buffer_end {
-        render_ctx.cursor = buffer_end;
-        buffer.reflow(render_ctx, buffer_end.line);
+    if render_ctx.cursor == buffer_end {
+        return EventResult::Continue;
     }
-    ControlFlow::Continue(())
+
+    render_ctx.cursor = buffer_end;
+    buffer.reflow(render_ctx, buffer_end.line);
+
+    EventResult::Repaint
 }
 
 #[cfg(test)]
@@ -619,7 +609,12 @@ mod tests {
         let mut ctx = RenderContext::new(10, 5, 0);
         let event = Event::FocusLost;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
     }
 
     #[test]
@@ -632,7 +627,12 @@ mod tests {
             None,
             &event,
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
     }
 
     #[test]
@@ -645,7 +645,12 @@ mod tests {
             None,
             &event,
         );
-        assert!(matches!(res, ControlFlow::Break(true)));
+        assert!(
+            matches!(res, EventResult::Accept),
+            "expected {:?}, got {:?}",
+            EventResult::Accept,
+            res
+        );
     }
 
     #[test]
@@ -663,7 +668,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -690,7 +700,12 @@ mod tests {
         ));
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -724,7 +739,12 @@ mod tests {
         ));
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -746,7 +766,12 @@ mod tests {
             KeyModifiers::NONE,
         ));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -755,7 +780,12 @@ mod tests {
         let expected_buf = make_buf(&["ë🎸"], ':');
         let expected_ctx = RenderContext { cursor: (0, 8).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -765,7 +795,12 @@ mod tests {
             EditBuffer { lines: vec![":ë🎸o".into()], ..buf.clone() };
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -786,7 +821,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(*buf.lines[0], *":a2345\tz");
         assert_eq!(buf.lines[0].width(), 9);
         assert_eq!(ctx.cursor, (0, 7).into());
@@ -798,7 +838,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(*buf.lines[0], *":a23456\tz");
         assert_eq!(buf.lines[0].width(), 9);
         assert_eq!(ctx.cursor, (0, 7).into());
@@ -809,7 +854,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(*buf.lines[0], *":a234567\tz");
         assert_eq!(buf.lines[0].width(), 17);
         assert_eq!(ctx.cursor, (0, 8).into());
@@ -835,7 +885,12 @@ mod tests {
             EditBuffer { lines: vec![":1234567🎸".into()], ..buf.clone() };
         let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -863,7 +918,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -892,7 +952,12 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
 
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -921,7 +986,12 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
 
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -953,7 +1023,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1000,7 +1075,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1041,7 +1121,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1089,7 +1174,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!((buf, ctx), (expected_buf, expected_ctx));
     }
 
@@ -1114,7 +1204,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1134,7 +1229,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1154,7 +1254,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1175,7 +1280,12 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1194,7 +1304,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1216,7 +1331,12 @@ mod tests {
         let expected_buf = make_buf(&["12345678"], ':');
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -1231,7 +1351,12 @@ mod tests {
         let expected_buf = make_buf(&["12345678a", "eiou"], ':');
         let expected_ctx = ctx;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1276,7 +1401,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1295,7 +1425,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1314,19 +1449,34 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1351,7 +1501,12 @@ mod tests {
         };
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1386,7 +1541,12 @@ mod tests {
         };
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1406,7 +1566,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1426,7 +1591,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { cursor: (0, 1).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1453,7 +1623,12 @@ mod tests {
             ..Default::default()
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1471,7 +1646,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1490,25 +1670,45 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { cursor: (0, 2).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx = RenderContext { cursor: (0, 5).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx = RenderContext { cursor: (0, 10).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1527,7 +1727,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { cursor: (1, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -1539,7 +1744,12 @@ mod tests {
         };
         let expected_ctx = RenderContext { cursor: (2, 0).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1574,7 +1784,12 @@ mod tests {
         };
 
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1606,8 +1821,13 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1639,8 +1859,13 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { cursor: (9, 0).into(), ..ctx };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1668,8 +1893,13 @@ mod tests {
             scroll_needed: 3,
             ..ctx
         };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1705,8 +1935,13 @@ mod tests {
             first_buffer_line: 5,
             ..ctx
         };
-        let ret = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(ret.is_continue());
+        let res = handle_event(&mut buf, &mut ctx, None, &event);
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1725,7 +1960,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = ctx;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1745,19 +1985,34 @@ mod tests {
         let expected_buf = make_buf(&["a🎸io"], ':');
         let expected_ctx = ctx;
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_buf = make_buf(&["aio"], ':');
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_buf = make_buf(&["ao"], ':');
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1777,7 +2032,12 @@ mod tests {
         let expected_buf = make_buf(&["12345678a", "bc"], ':');
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1803,7 +2063,12 @@ mod tests {
         );
         let expected_ctx = RenderContext { cursor: (0, 9).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1838,7 +2103,12 @@ mod tests {
         };
         let expected_buf = buf.clone();
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -1849,7 +2119,12 @@ mod tests {
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -1860,7 +2135,12 @@ mod tests {
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1895,7 +2175,12 @@ mod tests {
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 8));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
@@ -1906,14 +2191,24 @@ mod tests {
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 7));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
 
         let expected_ctx =
             RenderContext { display_height: 5, cursor: (0, 1).into(), ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 5));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -1950,7 +2245,12 @@ mod tests {
         let expected_ctx = RenderContext { display_width: 6, ..ctx };
 
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2000,7 +2300,12 @@ mod tests {
             RenderContext { display_width: 6, cursor: (1, 3).into(), ..ctx };
 
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2044,7 +2349,12 @@ mod tests {
         };
 
         let res = handle_event(&mut buf, &mut ctx, None, &Event::Resize(6, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2083,7 +2393,12 @@ mod tests {
             ..ctx
         };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2115,7 +2430,12 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_ctx = RenderContext { display_height: 10, ..ctx };
         let res = handle_event(&mut buf, &mut ctx, None, &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2152,7 +2472,12 @@ mod tests {
         let expected_ctx = RenderContext { display_width: 10, ..ctx };
         let res =
             handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2202,7 +2527,12 @@ mod tests {
             RenderContext { display_width: 10, cursor: (0, 9).into(), ..ctx };
         let res =
             handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2244,7 +2574,12 @@ mod tests {
         };
         let res =
             handle_event(&mut buf, &mut ctx, None, &Event::Resize(10, 10));
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2266,7 +2601,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2288,7 +2628,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2310,7 +2655,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2335,7 +2685,12 @@ mod tests {
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Continue),
+            "expected {:?}, got {:?}",
+            EventResult::Continue,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs, expected_hs);
@@ -2363,7 +2718,12 @@ mod tests {
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
         );
-        assert!(res.is_break());
+        assert!(
+            matches!(res, EventResult::Accept),
+            "expected {:?}, got {:?}",
+            EventResult::Accept,
+            res
+        );
         assert_eq!(hs.unwrap(), expected_hs);
     }
 
@@ -2392,7 +2752,12 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2429,7 +2794,12 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2465,7 +2835,12 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.as_ref(), Some(&expected_hs));
@@ -2483,7 +2858,12 @@ mod tests {
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_break());
+        assert!(
+            matches!(res, EventResult::Accept),
+            "expected {:?}, got {:?}",
+            EventResult::Accept,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.as_ref(), Some(&expected_hs));
@@ -2511,7 +2891,12 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2538,7 +2923,12 @@ mod tests {
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2567,7 +2957,12 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2603,7 +2998,12 @@ mod tests {
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut ctx, hs.as_mut(), &event);
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2638,7 +3038,12 @@ mod tests {
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
@@ -2661,7 +3066,12 @@ mod tests {
             None,
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
     }
@@ -2700,7 +3110,12 @@ mod tests {
             hs.as_mut(),
             &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
         );
-        assert!(res.is_continue());
+        assert!(
+            matches!(res, EventResult::Repaint),
+            "expected {:?}, got {:?}",
+            EventResult::Repaint,
+            res
+        );
         assert_eq!(buf, expected_buf);
         assert_eq!(ctx, expected_ctx);
         assert_eq!(hs.unwrap(), expected_hs);
