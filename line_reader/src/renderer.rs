@@ -149,7 +149,6 @@ mod tests {
             ],
             prompt: Some(':'),
             input_start: (0, 1).into(),
-            draft: None,
         };
         let view = View {
             display_width: 10,
@@ -157,10 +156,7 @@ mod tests {
             cursor: (2, 6).into(),
             ..Default::default()
         };
-        assert_eq!(
-            view.viewport_bottom(&buffer),
-            view.display_height - 1
-        );
+        assert_eq!(view.viewport_bottom(&buffer), view.display_height - 1);
         assert_eq!(view.viewport_top(), 0);
     }
 
@@ -178,7 +174,6 @@ mod tests {
             ],
             prompt: Some(':'),
             input_start: (0, 1).into(),
-            draft: None,
         };
         let view = View {
             display_width: 10,
@@ -207,7 +202,6 @@ mod tests {
             ],
             prompt: Some(':'),
             input_start: (0, 1).into(),
-            draft: None,
         };
         let view = View {
             display_width: 10,
@@ -215,10 +209,7 @@ mod tests {
             cursor: (0, 1).into(),
             ..Default::default()
         };
-        assert_eq!(
-            view.viewport_bottom(&buffer),
-            view.display_height - 2
-        );
+        assert_eq!(view.viewport_bottom(&buffer), view.display_height - 2);
         assert_eq!(view.viewport_top(), 0);
     }
 
@@ -236,7 +227,6 @@ mod tests {
             ],
             input_start: (0, 1).into(),
             prompt: Some(':'),
-            draft: None,
         };
         let view = View {
             display_width: 10,
@@ -245,10 +235,7 @@ mod tests {
             first_buffer_line: 1,
             ..Default::default()
         };
-        assert_eq!(
-            view.viewport_bottom(&buffer),
-            view.display_height - 2
-        );
+        assert_eq!(view.viewport_bottom(&buffer), view.display_height - 2);
         assert_eq!(view.viewport_top(), 1);
     }
 }

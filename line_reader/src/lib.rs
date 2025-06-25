@@ -226,9 +226,7 @@ fn handle_event(
         Event::Key(event) if event.kind == KeyEventKind::Press => {
             handle_key_event(buffer, view, history, event)
         }
-        Event::Resize(x, y) => {
-            handle_resize_event(buffer, view, *x, *y)
-        }
+        Event::Resize(x, y) => handle_resize_event(buffer, view, *x, *y),
         _ => EventResult::Continue,
     }
 }
@@ -251,8 +249,7 @@ fn handle_resize_event(
     }
     if view.display_height < old_height {
         let h_diff = old_height - view.display_height;
-        view.scroll_needed =
-            view.scroll_needed.saturating_sub(h_diff);
+        view.scroll_needed = view.scroll_needed.saturating_sub(h_diff);
     }
     EventResult::Repaint
 }
@@ -268,7 +265,7 @@ fn handle_key_event(
             if let Some(history) = history {
                 history.rewind();
                 if !buffer.is_empty()
-                    && history.last().is_none_or(|(last, _)| {
+                    && history.last().is_none_or(|last| {
                         last.chars().ne(buffer.input_chars())
                     })
                 {
@@ -297,9 +294,8 @@ fn handle_esc(
     view: &mut View,
     history: Option<&mut HistoryStack>,
 ) -> EventResult {
-    buffer.set_from_draft(view);
-    if let Some(history) = history {
-        history.rewind();
+    if let Some(draft) = history.and_then(|h| h.rewind()) {
+        buffer.set_input_text(view, draft);
     }
     EventResult::Repaint
 }
@@ -312,34 +308,12 @@ fn handle_down(
     let Some(history) = history else {
         return EventResult::Continue;
     };
-    if let Some((cur_a, &mut ref mut cur_e)) = history.current() {
-        // If buffer differs from current edited (if any) or else
-        // current accepted history, copy buffer to edited.
-        if buffer
-            .input_chars()
-            .ne(cur_e.as_ref().map_or_else(|| cur_a.chars(), |e| e.chars()))
-        {
-            let edited = cur_e.get_or_insert_with(String::new);
-            edited.clear();
-            edited.extend(buffer.input_chars());
-        }
-    } else {
-        // Not viewing history, nothing to do
+
+    let current: String = buffer.input_chars().collect();
+    let Some(history_line) = history.next_newer(current) else {
         return EventResult::Continue;
-    }
-
-    // Advance to next newer history.
-    // If there is none, take draft to load buffer
-    // Otherwise load buffer edited, if any, or accepted.
-    if let Some((ah, eh)) = history.next_newer() {
-        buffer.set_input_text(
-            view,
-            eh.as_ref().map_or(ah, |eh| eh.as_str()),
-        );
-    } else {
-        buffer.set_from_draft(view);
-    }
-
+    };
+    buffer.set_input_text(view, history_line);
     EventResult::Repaint
 }
 
@@ -351,38 +325,13 @@ fn handle_up(
     let Some(history) = history else {
         return EventResult::Continue;
     };
-    // If no older history to view, nothing to do
-    if !history.is_at_bottom() {
-        if history.is_at_top() {
-            // If not viewing history, save buffer to draft
-            buffer.save_draft();
-        } else {
-            // Otherwise, if buffer differs from current
-            // edited (if any) or else current accepted
-            // history, save buffer to current edited
-            // history.
-            let (cur_a, cur_e) = history
-                .current()
-                .expect("should be neither at_top or at_bottom");
-            if buffer
-                .input_chars()
-                .ne(cur_e.as_ref().map_or_else(|| cur_a.chars(), |e| e.chars()))
-            {
-                let edited = cur_e.get_or_insert_with(String::new);
-                edited.clear();
-                edited.extend(buffer.input_chars());
-            }
-        }
-        // Advance to next older history and load
-        // buffer from edited, if any, or else accepted.
-        let (accepted, edited) = history
-            .next_older()
-            .expect("shouldn't be either at_top or at_bottom");
-        buffer.set_input_text(
-            view,
-            edited.as_ref().map_or(accepted, |e| e.as_str()),
-        );
-    }
+
+    let current: String = buffer.input_chars().collect();
+
+    let Some(history_line) = history.next_older(current) else {
+        return EventResult::Continue;
+    };
+    buffer.set_input_text(view, history_line);
     EventResult::Repaint
 }
 
@@ -425,49 +374,38 @@ fn handle_char_input(
     if view.cursor.line == buffer.len() {
         buffer.lines.push(BufferLine::new());
     }
-    buffer.lines[view.cursor.line]
-        .insert(view.cursor.offset, c);
+    buffer.lines[view.cursor.line].insert(view.cursor.offset, c);
     view.cursor.offset += c.len_utf8();
 
     // reflow from line before cursor, if it exists,
     // catching case where new char fits on previous line
-    buffer
-        .reflow(view, view.cursor.line.saturating_sub(1));
+    buffer.reflow(view, view.cursor.line.saturating_sub(1));
 
     EventResult::Repaint
 }
 
-fn handle_backspace(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_backspace(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     if view.cursor == buffer.input_start {
         return EventResult::Continue;
     }
 
     if view.cursor.offset == 0 {
         view.cursor.line -= 1;
-        view.cursor.offset =
-            buffer.lines[view.cursor.line].len();
+        view.cursor.offset = buffer.lines[view.cursor.line].len();
     }
 
-    if let Some((i, _)) = buffer.lines[view.cursor.line]
-        [..view.cursor.offset]
+    if let Some((i, _)) = buffer.lines[view.cursor.line][..view.cursor.offset]
         .char_indices()
         .next_back()
     {
         buffer.lines[view.cursor.line].remove(i);
         view.cursor.offset = i;
     }
-    buffer
-        .reflow(view, view.cursor.line.saturating_sub(1));
+    buffer.reflow(view, view.cursor.line.saturating_sub(1));
     EventResult::Repaint
 }
 
-fn handle_left(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_left(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     use unicode_width::UnicodeWidthChar;
 
     if view.cursor == buffer.input_start {
@@ -476,8 +414,7 @@ fn handle_left(
 
     if view.cursor.offset == 0 {
         view.cursor.line -= 1;
-        view.cursor.offset =
-            buffer.lines[view.cursor.line].len();
+        view.cursor.offset = buffer.lines[view.cursor.line].len();
     }
 
     if let Some((prev_idx, _)) = buffer.lines[view.cursor.line]
@@ -492,10 +429,7 @@ fn handle_left(
     EventResult::Repaint
 }
 
-fn handle_right(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_right(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     // If aleady at end, nothing to do
     if view.cursor
         == (buffer.lines.len() - 1, buffer.lines.last().unwrap().len()).into()
@@ -504,13 +438,11 @@ fn handle_right(
     }
 
     let width_before_next_cursor = edit_buffer::str_width(
-        &buffer.lines[view.cursor.line]
-            [..view.cursor.offset],
+        &buffer.lines[view.cursor.line][..view.cursor.offset],
         0,
     );
 
-    if let Some((i, _)) = buffer.lines[view.cursor.line]
-        [view.cursor.offset..]
+    if let Some((i, _)) = buffer.lines[view.cursor.line][view.cursor.offset..]
         .char_indices()
         .skip(1)
         .find(|(_, c)| {
@@ -523,8 +455,7 @@ fn handle_right(
         && view.display_width - width_before_next_cursor > 0
     {
         // next cusor pos is at end of buffer
-        view.cursor.offset =
-            buffer.lines[view.cursor.line].len();
+        view.cursor.offset = buffer.lines[view.cursor.line].len();
     } else {
         // next cursor pos is on next line
         view.cursor.line += 1;
@@ -535,10 +466,7 @@ fn handle_right(
     EventResult::Repaint
 }
 
-fn handle_delete(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_delete(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     use unicode_width::UnicodeWidthChar;
 
     // if at end of buffer, nothing to do
@@ -558,10 +486,7 @@ fn handle_delete(
     EventResult::Repaint
 }
 
-fn handle_home(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_home(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     if view.cursor == buffer.input_start {
         return EventResult::Continue;
     }
@@ -573,10 +498,7 @@ fn handle_home(
     EventResult::Repaint
 }
 
-fn handle_end(
-    buffer: &mut EditBuffer,
-    view: &mut View,
-) -> EventResult {
+fn handle_end(buffer: &mut EditBuffer, view: &mut View) -> EventResult {
     let buffer_end = buffer.buffer_end();
     if view.cursor == buffer_end {
         return EventResult::Continue;
@@ -592,6 +514,7 @@ fn handle_end(
 #[allow(clippy::unicode_not_nfc)]
 mod tests {
     use super::*;
+    use crate::history_stack::test::HistoryStackBuilder;
 
     use crossterm::event::KeyModifiers;
     use similar_asserts::assert_eq;
@@ -1075,11 +998,8 @@ mod tests {
             ],
             ..buf.clone()
         };
-        let expected_view = View {
-            first_buffer_line: 2,
-            cursor: (6, 0).into(),
-            ..view
-        };
+        let expected_view =
+            View { first_buffer_line: 2, cursor: (6, 0).into(), ..view };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
@@ -1175,11 +1095,8 @@ mod tests {
             ],
             ..buf.clone()
         };
-        let expected_view = View {
-            first_buffer_line: 2,
-            cursor: (5, 0).into(),
-            ..view
-        };
+        let expected_view =
+            View { first_buffer_line: 2, cursor: (5, 0).into(), ..view };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut view, None, &event);
@@ -1401,11 +1318,8 @@ mod tests {
             ],
             ':',
         );
-        let expected_view = View {
-            first_buffer_line: 0,
-            cursor: (1, 9).into(),
-            ..view
-        };
+        let expected_view =
+            View { first_buffer_line: 0, cursor: (1, 9).into(), ..view };
 
         let event =
             Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
@@ -1543,11 +1457,8 @@ mod tests {
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_view = View {
-            first_buffer_line: 0,
-            cursor: (1, 8).into(),
-            ..view
-        };
+        let expected_view =
+            View { first_buffer_line: 0, cursor: (1, 8).into(), ..view };
 
         let res = handle_event(&mut buf, &mut view, None, &event);
         assert!(
@@ -1786,11 +1697,8 @@ mod tests {
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_view = View {
-            first_buffer_line: 1,
-            cursor: (4, 0).into(),
-            ..view
-        };
+        let expected_view =
+            View { first_buffer_line: 1, cursor: (4, 0).into(), ..view };
 
         let res = handle_event(&mut buf, &mut view, None, &event);
         assert!(
@@ -1939,11 +1847,8 @@ mod tests {
             ..Default::default()
         };
         let expected_buf = buf.clone();
-        let expected_view = View {
-            cursor: (9, 0).into(),
-            first_buffer_line: 5,
-            ..view
-        };
+        let expected_view =
+            View { cursor: (9, 0).into(), first_buffer_line: 5, ..view };
         let res = handle_event(&mut buf, &mut view, None, &event);
         assert!(
             matches!(res, EventResult::Repaint),
@@ -2686,7 +2591,6 @@ mod tests {
     #[test]
     fn down_nop_when_not_viewing_history() {
         let mut buf = make_buf(&["abcdëf🎸"], ':');
-        buf.draft = Some("abcdë🎸".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
@@ -2717,7 +2621,6 @@ mod tests {
     #[test]
     fn enter_adds_non_empty_input_to_history() {
         let mut buf = make_buf(&["123456789", "abc"], ':');
-        buf.draft = Some("abc".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
@@ -2725,11 +2628,10 @@ mod tests {
             ..Default::default()
         };
         let mut hs = Some(HistoryStack::new());
-        let expected_hs = HistoryStack {
-            lines: vec!["123456789abc".to_owned()],
-            edited: vec![None],
-            index: 1,
-        };
+        let expected_hs = HistoryStackBuilder::new()
+            .with_entries(&[("123456789abc", None)])
+            .with_index(1)
+            .build();
         let res = handle_event(
             &mut buf,
             &mut view,
@@ -2754,18 +2656,18 @@ mod tests {
             cursor: (1, 3).into(),
             ..Default::default()
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 3,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder.with_draft(Some("123456789abc"));
+        let hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(3)
+            .build();
+        let expected_hs = hs_builder.with_index(2).build();
         let expected_buf = EditBuffer {
             lines: vec![":baz".into()],
             input_start: (0, 1).into(),
             prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
         };
-        let expected_hs = HistoryStack { index: 2, ..hs.clone() };
         let expected_view = View { cursor: (0, 4).into(), ..view };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
@@ -2793,22 +2695,21 @@ mod tests {
             lines: vec![":ba".into()],
             input_start: (0, 1).into(),
             prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 1,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        let hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(1)
+            .with_draft(Some("123456789abc"))
+            .build();
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
+            .with_index(0)
+            .build();
 
         let expected_view = View { cursor: (0, 4).into(), ..view };
         let expected_buf =
             EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
-        let expected_hs = HistoryStack {
-            index: 0,
-            edited: vec![None, Some("ba".to_owned()), None],
-            ..hs.clone()
-        };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut view, hs.as_mut(), &event);
@@ -2818,10 +2719,11 @@ mod tests {
             EventResult::Repaint,
             res
         );
+        assert_eq!(hs.unwrap(), expected_hs);
         assert_eq!(buf, expected_buf);
         assert_eq!(view, expected_view);
-        assert_eq!(hs.unwrap(), expected_hs);
     }
+
     #[test]
     fn accepting_history_item_resets_history_stack() {
         let mut view = View {
@@ -2834,22 +2736,20 @@ mod tests {
             lines: vec![":ba".into()],
             input_start: (0, 1).into(),
             prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 1,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let hs = hs_builder.with_index(1).build();
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", Some("ba")), ("baz", None)])
+            .with_index(0)
+            .build();
 
         let expected_view = View { cursor: (0, 4).into(), ..view };
         let expected_buf =
             EditBuffer { lines: vec![":foo".into()], ..buf.clone() };
-        let expected_hs = HistoryStack {
-            index: 0,
-            edited: vec![None, Some("ba".to_owned()), None],
-            ..hs.clone()
-        };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut view, hs.as_mut(), &event);
@@ -2863,16 +2763,16 @@ mod tests {
         assert_eq!(view, expected_view);
         assert_eq!(hs.as_ref(), Some(&expected_hs));
 
-        let expected_hs = HistoryStack {
-            lines: vec![
-                "foo".to_owned(),
-                "bar".to_owned(),
-                "baz".to_owned(),
-                "foo".to_owned(),
-            ],
-            edited: vec![None, None, None, None],
-            index: 4,
-        };
+        let expected_hs = hs_builder
+            .with_entries(&[
+                ("foo", None),
+                ("bar", None),
+                ("baz", None),
+                ("foo", None),
+            ])
+            .with_index(4)
+            .with_draft(None)
+            .build();
         let event =
             Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let res = handle_event(&mut buf, &mut view, hs.as_mut(), &event);
@@ -2890,22 +2790,21 @@ mod tests {
     #[test]
     fn up_viewing_history_views_next_oldest_history() {
         let mut buf = make_buf(&["baz"], ':');
-        buf.draft = Some("123456789abc".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
             cursor: (0, 4).into(),
             ..Default::default()
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 2,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(1).build();
+        let hs = hs_builder.with_index(2).build();
         let expected_buf =
             EditBuffer { lines: vec![":bar".into()], ..buf.clone() };
         let expected_view = view;
-        let expected_hs = HistoryStack { index: 1, ..hs.clone() };
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut view, hs.as_mut(), &event);
@@ -2923,28 +2822,27 @@ mod tests {
     #[test]
     fn up_viewing_history_nop_after_oldest_history() {
         let mut buf = make_buf(&["foo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
             cursor: (0, 4).into(),
             ..Default::default()
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(0).build();
+        let hs = hs_builder.build();
         let expected_buf = buf.clone();
         let expected_view = view;
-        let expected_hs = hs.clone();
         let event = Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
         let mut hs = Some(hs);
         let res = handle_event(&mut buf, &mut view, hs.as_mut(), &event);
         assert!(
-            matches!(res, EventResult::Repaint),
+            matches!(res, EventResult::Continue),
             "expected {:?}, got {:?}",
-            EventResult::Repaint,
+            EventResult::Continue,
             res
         );
         assert_eq!(buf, expected_buf);
@@ -2955,22 +2853,21 @@ mod tests {
     #[test]
     fn down_viewing_history_views_next_newest_history() {
         let mut buf = make_buf(&["foo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
             cursor: (0, 4).into(),
             ..Default::default()
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_draft(Some("123456789abc"));
+        let expected_hs = hs_builder.with_index(1).build();
+        let hs = hs_builder.with_index(0).build();
         let expected_buf =
             EditBuffer { lines: vec![":bar".into()], ..buf.clone() };
         let expected_view = view;
-        let expected_hs = HistoryStack { index: 1, ..hs.clone() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let mut hs = Some(hs);
@@ -2998,20 +2895,19 @@ mod tests {
             lines: vec![":baz".into()],
             prompt: Some(':'),
             input_start: (0, 1).into(),
-            draft: Some("123456789abc".to_owned()),
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 2,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(3)
+            .with_draft(Some("123456789abc"))
+            .build();
+        let hs = hs_builder.with_index(2).build();
         let expected_view = View { cursor: (1, 3).into(), ..view };
         let expected_buf = EditBuffer {
             lines: vec![":123456789".into(), "abc".into()],
-            draft: None,
             ..buf.clone()
         };
-        let expected_hs = HistoryStack { index: 3, ..hs.clone() };
         let event =
             Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
         let mut hs = Some(hs);
@@ -3029,13 +2925,15 @@ mod tests {
 
     #[test]
     fn esc_editing_history_edits_draft() {
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        let expected_hs = hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(3)
+            .build();
+        let hs =
+            hs_builder.with_draft(Some("123456789abc")).with_index(0).build();
+
         let mut buf = make_buf(&["fo"], ':');
-        buf.draft = Some("123456789abc".to_owned());
         let mut view = View {
             display_width: 10,
             display_height: 5,
@@ -3044,11 +2942,6 @@ mod tests {
         };
         let expected_buf = make_buf(&["123456789", "abc"], ':');
         let expected_view = View { cursor: (1, 3).into(), ..view };
-        let expected_hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 3,
-        };
         let mut hs = Some(hs);
         let res = handle_event(
             &mut buf,
@@ -3100,7 +2993,6 @@ mod tests {
             lines: vec![":foo".into()],
             input_start: (0, 1).into(),
             prompt: Some(':'),
-            draft: Some("123456789abc".to_owned()),
         };
         let mut view = View {
             display_width: 10,
@@ -3108,19 +3000,19 @@ mod tests {
             cursor: (0, 4).into(),
             ..Default::default()
         };
-        let hs = HistoryStack {
-            lines: vec!["foo".to_owned(), "bar".to_owned(), "baz".to_owned()],
-            edited: vec![None, None, None],
-            index: 0,
-        };
+        let mut hs_builder = HistoryStackBuilder::new();
+        hs_builder
+            .with_entries(&[("foo", None), ("bar", None), ("baz", None)])
+            .with_index(3);
+        let expected_hs = hs_builder.build();
+        hs_builder.with_draft(Some("123456789abc")).with_index(0);
+        let hs = hs_builder.build();
 
         let expected_buf = EditBuffer {
             lines: vec![":123456789".into(), "abc".into()],
-            draft: None,
             ..buf.clone()
         };
         let expected_view = View { cursor: (1, 3).into(), ..view };
-        let expected_hs = HistoryStack { index: 3, ..hs.clone() };
         let mut hs = Some(hs);
         let res = handle_event(
             &mut buf,

@@ -13,7 +13,6 @@ pub struct EditBuffer {
     pub(crate) lines: Vec<BufferLine>,
     pub(crate) prompt: Option<char>,
     pub(crate) input_start: BufferIndex,
-    pub(crate) draft: Option<String>,
 }
 
 pub fn char_width(ch: char, width_before: usize) -> usize {
@@ -35,11 +34,7 @@ impl EditBuffer {
         EditBuffer { ..Default::default() }
     }
 
-    pub fn reset(
-        &mut self,
-        view: &mut View,
-        prompt: Option<char>,
-    ) {
+    pub fn reset(&mut self, view: &mut View, prompt: Option<char>) {
         let mut prompt_line = BufferLine::new();
         self.prompt = prompt;
         if let Some(ch) = prompt {
@@ -65,17 +60,6 @@ impl EditBuffer {
             .into()
     }
 
-    pub fn save_draft(&mut self) {
-        let draft = self.draft.get_or_insert_with(String::new);
-        draft.clear();
-        draft.extend(
-            self.lines
-                .iter()
-                .flat_map(|l| l.text.chars())
-                .skip(self.prompt.is_some().into()),
-        );
-    }
-
     pub fn input_chars(&self) -> impl Iterator<Item = char> + use<'_> {
         self.lines
             .iter()
@@ -91,11 +75,8 @@ impl EditBuffer {
         while tl_idx < self.lines.len() {
             match self.lines[tl_idx].width.cmp(&view.display_width) {
                 Ordering::Less => {
-                    if self
-                        .try_fill_from_next(view, tl_idx)
-                        .is_none()
-                        || self.lines[tl_idx].width
-                            == view.display_width
+                    if self.try_fill_from_next(view, tl_idx).is_none()
+                        || self.lines[tl_idx].width == view.display_width
                     {
                         tl_idx += 1;
                     }
@@ -106,8 +87,7 @@ impl EditBuffer {
                 }
                 Ordering::Equal => {
                     if tl_idx == view.cursor.line
-                        && view.cursor.offset
-                            == self.lines[tl_idx].len()
+                        && view.cursor.offset == self.lines[tl_idx].len()
                     {
                         view.cursor.line += 1;
                         view.cursor.offset = 0;
@@ -139,9 +119,7 @@ impl EditBuffer {
             (0, 0),
             |(res_idx, cols_moved), (i, c)| {
                 let c_width = char_width(c, cols_moved);
-                if view.display_width
-                    >= (tl_width + cols_moved + c_width)
-                {
+                if view.display_width >= (tl_width + cols_moved + c_width) {
                     ControlFlow::Continue((i + 1, cols_moved + c_width))
                 } else {
                     ControlFlow::Break((res_idx, cols_moved))
@@ -205,11 +183,7 @@ impl EditBuffer {
         }
     }
 
-    fn move_overflow_to_next(
-        &mut self,
-        view: &mut View,
-        tl_idx: usize,
-    ) {
+    fn move_overflow_to_next(&mut self, view: &mut View, tl_idx: usize) {
         assert!(self.lines[tl_idx].width > view.display_width);
         // check to see if there's a next_line & push one if not
         if tl_idx == self.lines.len() - 1 {
@@ -239,9 +213,7 @@ impl EditBuffer {
         next.width += cols_moved;
         next.text.insert_str(0, this.text.drain(res_idx..).as_str());
 
-        if tl_idx == view.cursor.line
-            && res_idx <= view.cursor.offset
-        {
+        if tl_idx == view.cursor.line && res_idx <= view.cursor.offset {
             // if this was the cursor line & char at cursor moved,
             // adjust cursor
             view.cursor.line += 1;
@@ -263,11 +235,7 @@ impl EditBuffer {
         }
     }
 
-    pub fn set_input_text(
-        &mut self,
-        view: &mut View,
-        text: impl AsRef<str>,
-    ) {
+    pub fn set_input_text(&mut self, view: &mut View, text: impl AsRef<str>) {
         let mut line = BufferLine::new();
         if let Some(ch) = self.prompt {
             line.push(ch);
@@ -279,14 +247,6 @@ impl EditBuffer {
         view.cursor = cursor;
         self.reflow(view, 0);
     }
-
-    pub fn set_from_draft(&mut self, view: &mut View) {
-        if let Some(draft) = self.draft.take() {
-            if draft.chars().ne(self.input_chars()) {
-                self.set_input_text(view, draft);
-            }
-        }
-    }
 }
 
 impl Default for EditBuffer {
@@ -295,7 +255,6 @@ impl Default for EditBuffer {
             lines: Vec::new(),
             prompt: None,
             input_start: (0, 0).into(),
-            draft: None,
         }
     }
 }
