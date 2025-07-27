@@ -473,6 +473,7 @@ fn do_global_cmds(
                 Cmd::Move(address, destination) => {
                     move_cmd(buffer, address, destination)
                 }
+                Cmd::List(address) => list_cmd(buffer, output, address),
                 Cmd::Null(address) | Cmd::Print(address) => {
                     print_cmd(buffer, output, address)
                 }
@@ -1298,6 +1299,55 @@ mod tests {
         assert_eq!(
             str::from_utf8(&output[..]).unwrap(),
             "2  two\n3  three\n4  four\n5  five\n"
+        );
+    }
+
+    #[test]
+    fn global_cmd_list() {
+        let mut buffer = EditBuffer::from(vec!["one\n", "two", "three"]);
+        buffer.set_current_line(1);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("t..").unwrap();
+        let commands = "l\r\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(1, 3)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("should have returned Ok(Some(ChangeSet))");
+        };
+        assert!(changes.is_empty());
+        assert_eq!(str::from_utf8(&output[..]).unwrap(), "two$\nthree$\n");
+    }
+
+    #[test]
+    fn global_cmd_list_with_addresses() {
+        let mut buffer = EditBuffer::from(vec![
+            "one\n", "two", "three", "four", "five", "six",
+        ]);
+        buffer.set_current_line(6);
+        let mut output = Vec::new();
+        let mut prev_pattern: Option<Regex> = None;
+        let pat = Regex::new("e$").unwrap();
+        let commands = "-1,.l\r\n".to_owned();
+        let Ok(Some(changes)) = global_cmd(
+            &mut buffer,
+            &mut output,
+            Some(Address::span(2, 5)),
+            &pat,
+            &commands,
+            &mut prev_pattern,
+        ) else {
+            panic!("unexpected global_cmd error!");
+        };
+        assert!(changes.is_empty());
+        assert_eq!(
+            str::from_utf8(&output[..]).unwrap(),
+            "two$\nthree$\nfour$\nfive$\n"
         );
     }
 
