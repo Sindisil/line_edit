@@ -131,7 +131,7 @@ checksum = "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a"
 
 [[package]]
 name = "line_reader"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "crossterm",
  "similar-asserts",
@@ -152,7 +152,7 @@ checksum = "cd945864f07fe9f5371a27ad7b52a172b4b499999f1d97574c9fa68373937e12"
 
 [[package]]
 name = "lned"
-version = "0.5.0-alpha"
+version = "0.5.0"
 dependencies = [
  "lexopt",
  "line_reader",
