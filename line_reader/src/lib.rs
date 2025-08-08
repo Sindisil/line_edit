@@ -20,15 +20,6 @@ pub trait LineRead {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read_line(
-        &mut self,
-        prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize>;
-
-    /// # Errors
-    ///
-    /// Will return `io::Error` if an error is encountered reading a line
     fn read(
         &mut self,
         buffer: &mut String,
@@ -109,17 +100,6 @@ impl LineReader {
 
 #[cfg(not(tarpaulin_include))]
 impl LineRead for LineReader {
-    fn read_line(
-        &mut self,
-        prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize> {
-        self.accept_line(
-            buffer,
-            &LineReaderOptions { prompt, ..Default::default() },
-        )
-    }
-
     fn read(
         &mut self,
         buffer: &mut String,
@@ -133,14 +113,6 @@ impl<T> LineRead for T
 where
     T: BufRead,
 {
-    fn read_line(
-        &mut self,
-        _prompt: Option<char>,
-        buffer: &mut String,
-    ) -> io::Result<usize> {
-        BufRead::read_line(self, buffer)
-    }
-
     fn read(
         &mut self,
         buffer: &mut String,
