@@ -2,18 +2,17 @@ use std::env::consts::{ARCH, OS};
 use std::process::Command;
 
 #[cfg(debug_assertions)]
-const BUILD_TYPE: &'static str = "debug";
+const BUILD_TYPE: &str = "debug";
 #[cfg(not(debug_assertions))]
-const BUILD_TYPE: &'static str = "release";
+const BUILD_TYPE: &str = "release";
 
 fn main() {
     let version = env!("CARGO_PKG_VERSION");
     let commit = get_commit();
     let tree_state = if is_working_tree_clean() { "" } else { "+" };
 
-    let version_string = format!(
-        "v{version} ({commit}{tree_state} {BUILD_TYPE} {OS} {ARCH})"
-    );
+    let version_string =
+        format!("v{version} ({commit}{tree_state} {BUILD_TYPE} {OS} {ARCH})");
 
     println!("cargo::rustc-env=LNED_VERSION={version_string}");
 }
