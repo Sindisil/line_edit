@@ -212,6 +212,10 @@ fn handle_key_pressed(
         EditCommand::DeleteToStart => handle_delete_to_start(buffer, view),
         EditCommand::DeleteToEnd => handle_delete_to_end(buffer, view),
         EditCommand::AcceptLine => handle_accept_line(buffer, history),
+        EditCommand::HistoryRFind => {
+            handle_history_rfind(buffer, view, history)
+        }
+        EditCommand::HistoryFind => handle_history_find(buffer, view, history),
     }
 }
 
@@ -389,6 +393,36 @@ fn handle_cursor_to_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
+fn handle_history_find(
+    buffer: &mut String,
+    view: &mut View,
+    history: Option<&mut HistoryStack>,
+) -> ControlFlow<()> {
+    if let Some(line) =
+        history.and_then(|h| h.find(&buffer[..view.insertion_point()]))
+    {
+        buffer.replace_range(.., line);
+        view.invalidate();
+    }
+
+    ControlFlow::Continue(())
+}
+
+fn handle_history_rfind(
+    buffer: &mut String,
+    view: &mut View,
+    history: Option<&mut HistoryStack>,
+) -> ControlFlow<()> {
+    if let Some(line) =
+        history.and_then(|h| h.rfind(&buffer[..view.insertion_point()]))
+    {
+        buffer.replace_range(.., line);
+        view.invalidate();
+    }
+
+    ControlFlow::Continue(())
+}
+
 #[derive(Debug, Copy, Clone)]
 enum EditCommand {
     CharInput(char),
@@ -404,6 +438,8 @@ enum EditCommand {
     DeleteToStart,
     DeleteToEnd,
     AcceptLine,
+    HistoryRFind,
+    HistoryFind,
 }
 
 #[derive(Debug)]
@@ -412,7 +448,7 @@ struct KeyBinding {
     command: EditCommand,
 }
 
-const KEY_BINDINGS: [KeyBinding; 13] = [
+const KEY_BINDINGS: [KeyBinding; 17] = [
     KeyBinding {
         key: (KeyCode::Enter, KeyModifiers::NONE),
         command: EditCommand::AcceptLine,
@@ -464,6 +500,22 @@ const KEY_BINDINGS: [KeyBinding; 13] = [
     KeyBinding {
         key: (KeyCode::Tab, KeyModifiers::NONE),
         command: EditCommand::CharInput('\t'),
+    },
+    KeyBinding {
+        key: (KeyCode::F(8), KeyModifiers::NONE),
+        command: EditCommand::HistoryRFind,
+    },
+    KeyBinding {
+        key: (KeyCode::Char('r'), KeyModifiers::CONTROL),
+        command: EditCommand::HistoryRFind,
+    },
+    KeyBinding {
+        key: (KeyCode::F(8), KeyModifiers::SHIFT),
+        command: EditCommand::HistoryFind,
+    },
+    KeyBinding {
+        key: (KeyCode::Char('s'), KeyModifiers::CONTROL),
+        command: EditCommand::HistoryFind,
     },
 ];
 
@@ -1507,5 +1559,133 @@ mod tests {
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn rfind_shows_match() {
+        let mut buf = "ol".to_owned();
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "old");
+        assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn rfind_uses_new_prefix() {
+        let mut buf = "ol".to_owned();
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        let _ = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+        )
+        .unwrap();
+        buf.replace_range(.., "ne");
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "newest");
+        assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn find_shows_match() {
+        let mut buf = "ol".to_owned();
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(&buf, "oldest");
+        assert_eq!(view.insertion_point(), 2);
+    }
+
+    #[test]
+    fn find_uses_new_prefix() {
+        let mut buf = "ol".to_owned();
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        let _ = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
+        )
+        .unwrap();
+        buf.replace_range(.., "ne");
+        let res = handle_event(
+            &mut buf,
+            &mut view,
+            Some(&mut hs),
+            &Event::Key(KeyEvent::new(
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL,
+            )),
+        )
+        .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(&buf, "newest");
+        assert_eq!(view.insertion_point(), 2);
     }
 }
