@@ -55,7 +55,6 @@ impl InputEditor {
         InputEditor { ..Default::default() }
     }
 
-    #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
@@ -103,7 +102,6 @@ impl InputEditor {
     }
 }
 
-#[cfg(not(tarpaulin_include))]
 impl LineInput for InputEditor {
     fn read(
         &mut self,
@@ -127,7 +125,6 @@ where
     }
 }
 
-#[cfg(not(tarpaulin_include))]
 fn pump_event(
     buffer: &mut String,
     view: &mut View,
@@ -137,7 +134,6 @@ fn pump_event(
     handle_event(buffer, view, history, &event)
 }
 
-#[cfg(not(tarpaulin_include))]
 fn handle_event(
     buffer: &mut String,
     view: &mut View,

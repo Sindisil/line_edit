@@ -214,7 +214,6 @@ impl View {
     }
 
     /// render current buffer to display
-    #[cfg(not(tarpaulin_include))]
     pub fn repaint(&mut self, buffer: &str) -> io::Result<()> {
         let Some(scroll_lines) = self.update(buffer) else {
             return Ok(());
@@ -283,7 +282,6 @@ impl View {
 }
 
 impl Drop for View {
-    #[cfg(not(tarpaulin_include))]
     fn drop(&mut self) {
         let _ = terminal::disable_raw_mode();
         let _ = io::stdout().execute(Show);
