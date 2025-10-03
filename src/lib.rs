@@ -1,3 +1,22 @@
+//! Terminal input with Windows style editing and optional history.
+//!
+//! Provides the ability to accept a line of input text from the
+//! terminal. The input text can be edited using common, obvious
+//! keys such as backspace, delete, the arrow keys, home, and end.
+//! The editing command style is similar to that used in most
+//! GUI apps and the various Windows command shells.
+//!
+//! Several optional features can be customized and/or enabled by
+//! providing a set of options, including:
+//! - An optional prompt may be specified (currently a single character)
+//! - Optional initial text may be specified (e.g., whitespace prefix
+//!   for "auto-indent")
+//! - The line history stack feature may be enabled or disabled.
+//!
+//! The intent is to be a simple, easy to use (both for the programmer
+//! and the end user) utility similar to libraries like readline,
+//! rustyline, etc., but not requiring the end user to know emacs or vi
+//! shortcuts.
 mod history_stack;
 mod renderer;
 
