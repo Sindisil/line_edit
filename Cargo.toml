@@ -1,5 +1,5 @@
 [package]
-name = "line_input"
+name = "line_edit"
 description = "accept a line of input (similar to read-line)"
 version = "0.4.0"
 edition = "2024"

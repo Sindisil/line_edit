@@ -21,24 +21,24 @@ use crate::renderer::Coord2D;
 use crate::renderer::DimWH;
 use crate::renderer::View;
 
-pub trait LineInput {
+pub trait LineEdit {
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &LineInputOptions,
+        options: &EditorOptions,
     ) -> io::Result<usize>;
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct InputEditor {
+pub struct LineEditor {
     history: Option<HistoryStack>,
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct LineInputOptions {
+pub struct EditorOptions {
     pub prompt: Option<char>,
     pub history: bool,
     pub indent: Option<String>,
@@ -49,16 +49,16 @@ pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
-impl InputEditor {
+impl LineEditor {
     #[must_use]
-    pub fn new() -> InputEditor {
-        InputEditor { ..Default::default() }
+    pub fn new() -> LineEditor {
+        LineEditor { ..Default::default() }
     }
 
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
-        options: &LineInputOptions,
+        options: &EditorOptions,
     ) -> io::Result<usize> {
         let term_size: DimWH = terminal::size()?.into();
         let (_, first_display_line) = cursor::position()?;
@@ -102,24 +102,24 @@ impl InputEditor {
     }
 }
 
-impl LineInput for InputEditor {
+impl LineEdit for LineEditor {
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &LineInputOptions,
+        options: &EditorOptions,
     ) -> io::Result<usize> {
         self.accept_line(buffer, options)
     }
 }
 
-impl<T> LineInput for T
+impl<T> LineEdit for T
 where
     T: BufRead,
 {
     fn read(
         &mut self,
         buffer: &mut String,
-        _options: &LineInputOptions,
+        _options: &EditorOptions,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }
