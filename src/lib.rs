@@ -47,7 +47,7 @@ pub trait LineEdit {
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize>;
 }
 
@@ -77,18 +77,19 @@ impl LineEditor {
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         let term_size: DimWH = terminal::size()?.into();
         let (_, first_display_line) = cursor::position()?;
 
         // View has Drop impl to ensure terminal reset to cooked
         // and cursor not hidden.
-        let mut view = View::new(term_size, first_display_line, options.prompt);
+        let prompt = options.and_then(|o| o.prompt);
+        let mut view = View::new(term_size, first_display_line, prompt);
         terminal::enable_raw_mode()?;
 
         // instantiate and/or get history stack, if necessary
-        let history = if options.history {
+        let history = if options.is_some_and(|o| o.history) {
             self.history.get_or_insert_with(HistoryStack::new);
             &mut self.history
         } else {
@@ -97,7 +98,7 @@ impl LineEditor {
 
         let mut input_buffer = String::with_capacity(80);
 
-        if let Some(indent) = options.indent.as_ref() {
+        if let Some(indent) = options.and_then(|o| o.indent.as_ref()) {
             input_buffer.push_str(indent);
             view.set_insertion_point(input_buffer.len());
         }
@@ -125,7 +126,7 @@ impl LineEdit for LineEditor {
     fn read(
         &mut self,
         buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         self.accept_line(buffer, options)
     }
@@ -138,7 +139,7 @@ where
     fn read(
         &mut self,
         buffer: &mut String,
-        _options: &EditorOptions,
+        _options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         BufRead::read_line(self, buffer)
     }

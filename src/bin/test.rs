@@ -8,7 +8,7 @@ fn main() {
     let mut reader = LineEditor::new();
     let res = reader.read(
         &mut line,
-        &EditorOptions { prompt: Some(':'), ..Default::default() },
+        Some(&EditorOptions { prompt: Some(':'), ..Default::default() }),
     );
     match res {
         Err(e) => eprintln!("{e}"),
