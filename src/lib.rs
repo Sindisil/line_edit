@@ -1,7 +1,27 @@
+#![warn(missing_docs)]
+//! Terminal input with Windows style editing and optional history.
+//!
+//! Provides the ability to accept a line of input text from the
+//! terminal. The input text can be edited using common, obvious
+//! keys such as backspace, delete, the arrow keys, home, and end.
+//! The editing command style is similar to that used in most
+//! GUI apps and the various Windows command shells.
+//!
+//! Several optional features can be customized and/or enabled by
+//! providing a set of options, including:
+//! - An optional prompt may be specified (currently a single character)
+//! - Optional initial text may be specified (e.g., whitespace prefix
+//!   for "auto-indent")
+//! - The line history stack feature may be enabled or disabled.
+//!
+//! The intent is to be a simple, easy to use (both for the programmer
+//! and the end user) utility similar to libraries like readline,
+//! rustyline, etc., but not requiring the end user to know emacs or vi
+//! shortcuts.
 mod history_stack;
 mod renderer;
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -21,55 +41,96 @@ use crate::renderer::Coord2D;
 use crate::renderer::DimWH;
 use crate::renderer::View;
 
+/// The `LineEdit` trait allows for accepting a line of input text.
+///
+/// Implementors of the `LineEdit` trait are called 'line editors'.
+///
+/// Line editors are defined by one required method [`read_line()`].
+/// Each call to [`read_line()`] will attempt to accept input text
+/// characters into a provided buffer, possibly with the line editor's
+/// behavior modified by a set of specified options.
+/// 
+/// [`read_line()`]: LineEdit::read_line
 pub trait LineEdit {
+    /// Accept input text characters into a provided buffer,
+    /// returning the number of bytes read.
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read(
+    fn read_line(
         &mut self,
         buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize>;
 }
 
+/// A `LineEdit` implementation accepting user input from a terminal.
+///
+/// `LineEditor` implements a set of line editing commands and optional
+/// line history functionality.
+///
+///
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LineEditor {
     history: Option<HistoryStack>,
 }
 
+/// Line editor options.
 #[derive(Debug, Default, Clone)]
 pub struct EditorOptions {
+    /// Prompt character displayed before user input
     pub prompt: Option<char>,
+    /// 'true' if line history should be enbled, false if not
     pub history: bool,
-    pub indent: Option<String>,
+    /// Initial input buffer text.
+    pub prefill: Option<String>,
 }
 
+/// Returns the native text line terminator sequence for the
+/// execution environment. This will be "\r\n" when called on
+/// a Windows sytem, "\n" otherwise.
 #[must_use]
 pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
 impl LineEditor {
+/// Creates a new `LineEditor`.
+///
+/// The new instance will not allocate space to store
+/// history until a read is done with that option enabled.
     #[must_use]
     pub fn new() -> LineEditor {
         LineEditor { ..Default::default() }
     }
 
+    /// Returns the terminal size (columns, rows).
+    ///
+    /// The dimensions are 1 based.
+    ///
+    /// # Errors
+    ///
+    /// Will return `io::Error` if one is encountered determining the size.
+    pub fn terminal_size() -> io::Result<(u16, u16)> {
+        terminal::size()
+    }
+
     fn accept_line(
         &mut self,
         output_buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
-        let term_size: DimWH = terminal::size()?.into();
+        let term_size: DimWH = Self::terminal_size()?.into();
         let (_, first_display_line) = cursor::position()?;
 
         // View has Drop impl to ensure terminal reset to cooked
         // and cursor not hidden.
-        let mut view = View::new(term_size, first_display_line, options.prompt);
+        let prompt = options.and_then(|o| o.prompt);
+        let mut view = View::new(term_size, first_display_line, prompt);
         terminal::enable_raw_mode()?;
 
         // instantiate and/or get history stack, if necessary
-        let history = if options.history {
+        let history = if options.is_some_and(|o| o.history) {
             self.history.get_or_insert_with(HistoryStack::new);
             &mut self.history
         } else {
@@ -78,8 +139,8 @@ impl LineEditor {
 
         let mut input_buffer = String::with_capacity(80);
 
-        if let Some(indent) = options.indent.as_ref() {
-            input_buffer.push_str(indent);
+        if let Some(prefill) = options.and_then(|o| o.prefill.as_ref()) {
+            input_buffer.push_str(prefill);
             view.set_insertion_point(input_buffer.len());
         }
 
@@ -103,25 +164,12 @@ impl LineEditor {
 }
 
 impl LineEdit for LineEditor {
-    fn read(
+    fn read_line(
         &mut self,
         buffer: &mut String,
-        options: &EditorOptions,
+        options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         self.accept_line(buffer, options)
-    }
-}
-
-impl<T> LineEdit for T
-where
-    T: BufRead,
-{
-    fn read(
-        &mut self,
-        buffer: &mut String,
-        _options: &EditorOptions,
-    ) -> io::Result<usize> {
-        BufRead::read_line(self, buffer)
     }
 }
 

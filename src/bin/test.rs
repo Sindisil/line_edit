@@ -6,9 +6,9 @@ use line_edit::LineEditor;
 fn main() {
     let mut line = String::new();
     let mut reader = LineEditor::new();
-    let res = reader.read(
+    let res = reader.read_line(
         &mut line,
-        &EditorOptions { prompt: Some(':'), ..Default::default() },
+        Some(&EditorOptions { prompt: Some(':'), ..Default::default() }),
     );
     match res {
         Err(e) => eprintln!("{e}"),
