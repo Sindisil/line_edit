@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Terminal input with Windows style editing and optional history.
 //!
 //! Provides the ability to accept a line of input text from the
@@ -20,7 +21,7 @@
 mod history_stack;
 mod renderer;
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, Write};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -40,38 +41,78 @@ use crate::renderer::Coord2D;
 use crate::renderer::DimWH;
 use crate::renderer::View;
 
+/// The `LineEdit` trait allows for accepting a line of input text.
+///
+/// Implementors of the `LineEdit` trait are called 'line editors'.
+///
+/// Line editors are defined by one required method [`read_line()`].
+/// Each call to [`read_line()`] will attempt to accept input text
+/// characters into a provided buffer, possibly with the line editor's
+/// behavior modified by a set of specified options.
+/// 
+/// [`read_line()`]: LineEdit::read_line
 pub trait LineEdit {
+    /// Accept input text characters into a provided buffer,
+    /// returning the number of bytes read.
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read(
+    fn read_line(
         &mut self,
         buffer: &mut String,
         options: Option<&EditorOptions>,
     ) -> io::Result<usize>;
 }
 
+/// A `LineEdit` implementation accepting user input from a terminal.
+///
+/// `LineEditor` implements a set of line editing commands and optional
+/// line history functionality.
+///
+///
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LineEditor {
     history: Option<HistoryStack>,
 }
 
+/// Line editor options.
 #[derive(Debug, Default, Clone)]
 pub struct EditorOptions {
+    /// Prompt character displayed before user input
     pub prompt: Option<char>,
+    /// 'true' if line history should be enbled, false if not
     pub history: bool,
-    pub indent: Option<String>,
+    /// Initial input buffer text.
+    pub prefill: Option<String>,
 }
 
+/// Returns the native text line terminator sequence for the
+/// execution environment. This will be "\r\n" when called on
+/// a Windows sytem, "\n" otherwise.
 #[must_use]
 pub fn native_eol() -> &'static str {
     if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
 impl LineEditor {
+/// Creates a new `LineEditor`.
+///
+/// The new instance will not allocate space to store
+/// history until a read is done with that option enabled.
     #[must_use]
     pub fn new() -> LineEditor {
         LineEditor { ..Default::default() }
+    }
+
+    /// Returns the terminal size (columns, rows).
+    ///
+    /// The dimensions are 1 based.
+    ///
+    /// # Errors
+    ///
+    /// Will return `io::Error` if one is encountered determining the size.
+    pub fn terminal_size() -> io::Result<(u16, u16)> {
+        terminal::size()
     }
 
     fn accept_line(
@@ -79,7 +120,7 @@ impl LineEditor {
         output_buffer: &mut String,
         options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
-        let term_size: DimWH = terminal::size()?.into();
+        let term_size: DimWH = Self::terminal_size()?.into();
         let (_, first_display_line) = cursor::position()?;
 
         // View has Drop impl to ensure terminal reset to cooked
@@ -98,8 +139,8 @@ impl LineEditor {
 
         let mut input_buffer = String::with_capacity(80);
 
-        if let Some(indent) = options.and_then(|o| o.indent.as_ref()) {
-            input_buffer.push_str(indent);
+        if let Some(prefill) = options.and_then(|o| o.prefill.as_ref()) {
+            input_buffer.push_str(prefill);
             view.set_insertion_point(input_buffer.len());
         }
 
@@ -123,25 +164,12 @@ impl LineEditor {
 }
 
 impl LineEdit for LineEditor {
-    fn read(
+    fn read_line(
         &mut self,
         buffer: &mut String,
         options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         self.accept_line(buffer, options)
-    }
-}
-
-impl<T> LineEdit for T
-where
-    T: BufRead,
-{
-    fn read(
-        &mut self,
-        buffer: &mut String,
-        _options: Option<&EditorOptions>,
-    ) -> io::Result<usize> {
-        BufRead::read_line(self, buffer)
     }
 }
 
