@@ -49,7 +49,7 @@ use crate::renderer::View;
 /// Each call to [`read_line()`] will attempt to accept input text
 /// characters into a provided buffer, possibly with the line editor's
 /// behavior modified by a set of specified options.
-/// 
+///
 /// [`read_line()`]: LineEdit::read_line
 pub trait LineEdit {
     /// Accept input text characters into a provided buffer,
@@ -95,10 +95,10 @@ pub fn native_eol() -> &'static str {
 }
 
 impl LineEditor {
-/// Creates a new `LineEditor`.
-///
-/// The new instance will not allocate space to store
-/// history until a read is done with that option enabled.
+    /// Creates a new `LineEditor`.
+    ///
+    /// The new instance will not allocate space to store
+    /// history until a read is done with history enabled.
     #[must_use]
     pub fn new() -> LineEditor {
         LineEditor { ..Default::default() }
