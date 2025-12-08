@@ -73,6 +73,8 @@ pub trait LineEdit {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct LineEditor {
     history: Option<HistoryStack>,
+    use_history: bool,
+    key_bindings: KeyMap,
 }
 
 /// Line editor options.
@@ -104,6 +106,11 @@ impl LineEditor {
         LineEditor { ..Default::default() }
     }
 
+    #[cfg(test)]
+    fn with_history(history: Option<HistoryStack>) -> LineEditor {
+        LineEditor { history, use_history: true, ..Default::default() }
+    }
+
     /// Returns the terminal size (columns, rows).
     ///
     /// The dimensions are 1 based.
@@ -129,13 +136,10 @@ impl LineEditor {
         let mut view = View::new(term_size, first_display_line, prompt);
         terminal::enable_raw_mode()?;
 
-        // instantiate and/or get history stack, if necessary
-        let history = if options.is_some_and(|o| o.history) {
-            self.history.get_or_insert_with(HistoryStack::new);
-            &mut self.history
-        } else {
-            &mut None
-        };
+        self.use_history = options.is_some_and(|o| o.history);
+        if self.use_history && self.history.is_none() {
+            self.history = Some(HistoryStack::new());
+        }
 
         let mut input_buffer = String::with_capacity(80);
 
@@ -145,13 +149,11 @@ impl LineEditor {
         }
 
         view.repaint(&input_buffer)?;
-        while pump_event(&mut input_buffer, &mut view, history.as_mut())?
-            .is_continue()
-        {
+        while self.pump_event(&mut input_buffer, &mut view)?.is_continue() {
             view.repaint(&input_buffer)?;
         }
 
-        let _ = handle_cursor_to_end(&input_buffer, &mut view);
+        let _ = do_cursor_to_end(&input_buffer, &mut view);
         let mut stdout = io::stdout().lock();
         stdout.write_all(b"\r\n")?;
         stdout.flush()?;
@@ -160,6 +162,89 @@ impl LineEditor {
         output_buffer.push_str(&input_buffer);
         output_buffer.push_str(native_eol());
         Ok(output_buffer.len() - prev_bytes)
+    }
+
+    fn pump_event(
+        &mut self,
+        buffer: &mut String,
+        view: &mut View,
+    ) -> io::Result<ControlFlow<()>> {
+        let event = event::read()?;
+        self.handle_event(buffer, view, &event)
+    }
+
+    fn handle_event(
+        &mut self,
+        buffer: &mut String,
+        view: &mut View,
+        event: &Event,
+    ) -> io::Result<ControlFlow<()>> {
+        match event {
+            Event::Key(event) if event.is_press() => Ok(self
+                .handle_key_pressed(
+                    (event.code, event.modifiers),
+                    buffer,
+                    view,
+                )),
+            &Event::Resize(mut w, mut h) => {
+                while let Ok(true) = event::poll(Duration::from_millis(50)) {
+                    if let Event::Resize(w1, h1) = event::read()? {
+                        (w, h) = (w1, h1);
+                    }
+                }
+                let cursor_position: Coord2D = cursor::position()?.into();
+                view.resize(DimWH(w, h), cursor_position, buffer);
+                Ok(ControlFlow::Continue(()))
+            }
+            Event::Key(_)
+            | Event::FocusGained
+            | Event::FocusLost
+            | Event::Mouse(_)
+            | Event::Paste(_) => Ok(ControlFlow::Continue(())),
+        }
+    }
+
+    fn handle_key_pressed(
+        &mut self,
+        key: (KeyCode, KeyModifiers),
+        buffer: &mut String,
+        view: &mut View,
+    ) -> ControlFlow<()> {
+        let Some(command) = self.key_bindings.get(key) else {
+            return ControlFlow::Continue(());
+        };
+
+        let history =
+            if self.use_history { self.history.as_mut() } else { None };
+        match command {
+            EditCommand::CharInput(ch) => do_char_input(buffer, view, ch),
+            EditCommand::Backspace => do_backspace(buffer, view),
+            EditCommand::Delete => do_delete(buffer, view),
+            EditCommand::HistoryNextBack => {
+                do_history_next_back(buffer, view, history)
+            }
+            EditCommand::HistoryNext => do_history_next(buffer, view, history),
+            EditCommand::RestoreDraft => {
+                do_restore_draft(buffer, view, history)
+            }
+            EditCommand::CursorLeft => do_cursor_left(buffer, view),
+            EditCommand::CursorRight => do_cursor_right(buffer, view),
+            EditCommand::CursorToStart => do_cursor_to_start(view),
+            EditCommand::CursorToEnd => do_cursor_to_end(buffer, view),
+            EditCommand::DeleteToStart => do_delete_to_start(buffer, view),
+            EditCommand::DeleteToEnd => do_delete_to_end(buffer, view),
+            EditCommand::AcceptLine => do_accept_line(buffer, history),
+            EditCommand::HistoryRFind => {
+                do_history_rfind(buffer, view, history)
+            }
+            EditCommand::HistoryFind => do_history_find(buffer, view, history),
+            EditCommand::Indent => do_indent(buffer, view),
+            EditCommand::Dedent => do_dedent(buffer, view),
+            EditCommand::CursorSpanLeft => do_cursor_span_left(buffer, view),
+            EditCommand::CursorSpanRight => do_cursor_span_right(buffer, view),
+            EditCommand::DeleteSpanLeft => do_delete_span_left(buffer, view),
+            EditCommand::DeleteSpanRight => do_delete_span_right(buffer, view),
+        }
     }
 }
 
@@ -173,112 +258,11 @@ impl LineEdit for LineEditor {
     }
 }
 
-fn pump_event(
-    buffer: &mut String,
-    view: &mut View,
-    history: Option<&mut HistoryStack>,
-) -> io::Result<ControlFlow<()>> {
-    let event = event::read()?;
-    handle_event(buffer, view, history, &event)
-}
-
-fn handle_event(
-    buffer: &mut String,
-    view: &mut View,
-    history: Option<&mut HistoryStack>,
-    event: &Event,
-) -> io::Result<ControlFlow<()>> {
-    match event {
-        Event::Key(event) if event.is_press() => Ok(handle_key_pressed(
-            (event.code, event.modifiers),
-            buffer,
-            view,
-            history,
-        )),
-        &Event::Resize(mut w, mut h) => {
-            while let Ok(true) = event::poll(Duration::from_millis(50)) {
-                if let Event::Resize(w1, h1) = event::read()? {
-                    (w, h) = (w1, h1);
-                }
-            }
-            let cursor_position: Coord2D = cursor::position()?.into();
-            Ok(handle_resize(buffer, view, DimWH(w, h), cursor_position))
-        }
-        Event::Key(_)
-        | Event::FocusGained
-        | Event::FocusLost
-        | Event::Mouse(_)
-        | Event::Paste(_) => Ok(ControlFlow::Continue(())),
-    }
-}
-
-fn handle_resize(
+fn do_accept_line(
     buffer: &str,
-    view: &mut View,
-    size: DimWH,
-    cursor_position: Coord2D,
+    mut history: Option<&mut HistoryStack>,
 ) -> ControlFlow<()> {
-    view.resize(size, cursor_position, buffer);
-    ControlFlow::Continue(())
-}
-
-fn handle_key_pressed(
-    key: (KeyCode, KeyModifiers),
-    buffer: &mut String,
-    view: &mut View,
-    history: Option<&mut HistoryStack>,
-) -> ControlFlow<()> {
-    // decode command
-    let command =
-        if let (KeyCode::Char(ch), KeyModifiers::NONE | KeyModifiers::SHIFT) =
-            key
-        {
-            EditCommand::CharInput(ch)
-        } else if let Some(binding) =
-            KEY_BINDINGS.iter().find(|binding| binding.key == key)
-        {
-            binding.command
-        } else {
-            return ControlFlow::Continue(());
-        };
-
-    // dispatch command
-    match command {
-        EditCommand::CharInput(ch) => handle_char_input(buffer, view, ch),
-        EditCommand::Backspace => handle_backspace(buffer, view),
-        EditCommand::Delete => handle_delete(buffer, view),
-        EditCommand::HistoryNextBack => {
-            handle_history_next_back(buffer, view, history)
-        }
-        EditCommand::HistoryNext => handle_history_next(buffer, view, history),
-        EditCommand::RestoreDraft => {
-            handle_restore_draft(buffer, view, history)
-        }
-        EditCommand::CursorLeft => handle_cursor_left(buffer, view),
-        EditCommand::CursorRight => handle_cursor_right(buffer, view),
-        EditCommand::CursorToStart => handle_cursor_to_start(view),
-        EditCommand::CursorToEnd => handle_cursor_to_end(buffer, view),
-        EditCommand::DeleteToStart => handle_delete_to_start(buffer, view),
-        EditCommand::DeleteToEnd => handle_delete_to_end(buffer, view),
-        EditCommand::AcceptLine => handle_accept_line(buffer, history),
-        EditCommand::HistoryRFind => {
-            handle_history_rfind(buffer, view, history)
-        }
-        EditCommand::HistoryFind => handle_history_find(buffer, view, history),
-        EditCommand::Indent => handle_indent(buffer, view),
-        EditCommand::Dedent => handle_dedent(buffer, view),
-        EditCommand::CursorSpanLeft => handle_cursor_span_left(buffer, view),
-        EditCommand::CursorSpanRight => handle_cursor_span_right(buffer, view),
-        EditCommand::DeleteSpanLeft => handle_delete_span_left(buffer, view),
-        EditCommand::DeleteSpanRight => handle_delete_span_right(buffer, view),
-    }
-}
-
-fn handle_accept_line(
-    buffer: &str,
-    history: Option<&mut HistoryStack>,
-) -> ControlFlow<()> {
-    if let Some(history) = history {
+    if let Some(ref mut history) = history {
         history.rewind();
         if !buffer.is_empty()
             && history.last().is_none_or(|last| last != buffer)
@@ -289,7 +273,7 @@ fn handle_accept_line(
     ControlFlow::Break(())
 }
 
-fn handle_restore_draft(
+fn do_restore_draft(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -301,7 +285,7 @@ fn handle_restore_draft(
     ControlFlow::Continue(())
 }
 
-fn handle_history_next(
+fn do_history_next(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -314,7 +298,7 @@ fn handle_history_next(
     ControlFlow::Continue(())
 }
 
-fn handle_history_next_back(
+fn do_history_next_back(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -327,7 +311,7 @@ fn handle_history_next_back(
     ControlFlow::Continue(())
 }
 
-fn handle_char_input(
+fn do_char_input(
     buffer: &mut String,
     view: &mut View,
     c: char,
@@ -352,7 +336,7 @@ fn handle_char_input(
     ControlFlow::Continue(())
 }
 
-fn handle_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+fn do_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0
         && let Some((i, _)) =
             buffer[..view.insertion_point()].char_indices().next_back()
@@ -364,7 +348,7 @@ fn handle_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0
         && let Some((prev_idx, _)) = buffer[..view.insertion_point()]
             .char_indices()
@@ -376,7 +360,7 @@ fn handle_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     // If aleady at end, nothing to do
     if view.insertion_point() != buffer.len() {
         let next_idx = buffer[view.insertion_point()..]
@@ -390,7 +374,7 @@ fn handle_cursor_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_delete(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+fn do_delete(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // if at end of buffer, nothing to do
     let cur_idx = view.insertion_point();
     if cur_idx != buffer.len() {
@@ -406,10 +390,7 @@ fn handle_delete(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_delete_to_start(
-    buffer: &mut String,
-    view: &mut View,
-) -> ControlFlow<()> {
+fn do_delete_to_start(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // if at start of buffer, nothing to do
     if view.insertion_point() != 0 {
         buffer.replace_range(..view.insertion_point(), "");
@@ -419,10 +400,7 @@ fn handle_delete_to_start(
     ControlFlow::Continue(())
 }
 
-fn handle_delete_to_end(
-    buffer: &mut String,
-    view: &mut View,
-) -> ControlFlow<()> {
+fn do_delete_to_end(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // if at end of buffer, nothing to do
     if view.insertion_point() != buffer.len() {
         buffer.replace_range(view.insertion_point().., "");
@@ -432,7 +410,7 @@ fn handle_delete_to_end(
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_to_start(view: &mut View) -> ControlFlow<()> {
+fn do_cursor_to_start(view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0 {
         view.set_insertion_point(0);
     }
@@ -440,7 +418,7 @@ fn handle_cursor_to_start(view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_to_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_to_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != buffer.len() {
         view.set_insertion_point(buffer.len());
     }
@@ -448,7 +426,7 @@ fn handle_cursor_to_end(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_history_find(
+fn do_history_find(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -463,7 +441,7 @@ fn handle_history_find(
     ControlFlow::Continue(())
 }
 
-fn handle_history_rfind(
+fn do_history_rfind(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -478,7 +456,7 @@ fn handle_history_rfind(
     ControlFlow::Continue(())
 }
 
-fn handle_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+fn do_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // If the first buffer char is tab ('\t'), insert one additional
     // tab at start of line. If not, insert up to 4 space (' ') chars
     // at start of line, so that leading spaces are the next multiple
@@ -496,7 +474,7 @@ fn handle_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
+fn do_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // If the first buffer char is tab ('\t'), delete it.
     // If not, delete up to 4 leading spaces so that the
     // number of remaining leading spaces is a multple of four.
@@ -542,7 +520,7 @@ fn span_type(s: &str) -> SpanType {
     }
 }
 
-fn handle_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() == 0 {
         return ControlFlow::Continue(());
     }
@@ -567,7 +545,7 @@ fn handle_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     let mut gr_idxs = buffer
         .grapheme_indices(true)
         .skip_while(|(i, _)| *i < view.insertion_point());
@@ -589,7 +567,7 @@ fn handle_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn handle_delete_span_left(
+fn do_delete_span_left(
     buffer: &mut String,
     view: &mut View,
 ) -> ControlFlow<()> {
@@ -614,7 +592,7 @@ fn handle_delete_span_left(
     ControlFlow::Continue(())
 }
 
-fn handle_delete_span_right(
+fn do_delete_span_right(
     buffer: &mut String,
     view: &mut View,
 ) -> ControlFlow<()> {
@@ -639,7 +617,7 @@ fn handle_delete_span_right(
     ControlFlow::Continue(())
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum EditCommand {
     CharInput(char),
     Backspace,
@@ -664,107 +642,136 @@ enum EditCommand {
     DeleteSpanRight,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct KeyBinding {
     key: (KeyCode, KeyModifiers),
     command: EditCommand,
 }
 
-const KEY_BINDINGS: [KeyBinding; 23] = [
-    KeyBinding {
-        key: (KeyCode::Enter, KeyModifiers::NONE),
-        command: EditCommand::AcceptLine,
-    },
-    KeyBinding {
-        key: (KeyCode::Left, KeyModifiers::NONE),
-        command: EditCommand::CursorLeft,
-    },
-    KeyBinding {
-        key: (KeyCode::Right, KeyModifiers::NONE),
-        command: EditCommand::CursorRight,
-    },
-    KeyBinding {
-        key: (KeyCode::Home, KeyModifiers::NONE),
-        command: EditCommand::CursorToStart,
-    },
-    KeyBinding {
-        key: (KeyCode::Home, KeyModifiers::CONTROL),
-        command: EditCommand::DeleteToStart,
-    },
-    KeyBinding {
-        key: (KeyCode::End, KeyModifiers::NONE),
-        command: EditCommand::CursorToEnd,
-    },
-    KeyBinding {
-        key: (KeyCode::End, KeyModifiers::CONTROL),
-        command: EditCommand::DeleteToEnd,
-    },
-    KeyBinding {
-        key: (KeyCode::Backspace, KeyModifiers::NONE),
-        command: EditCommand::Backspace,
-    },
-    KeyBinding {
-        key: (KeyCode::Delete, KeyModifiers::NONE),
-        command: EditCommand::Delete,
-    },
-    KeyBinding {
-        key: (KeyCode::Up, KeyModifiers::NONE),
-        command: EditCommand::HistoryNextBack,
-    },
-    KeyBinding {
-        key: (KeyCode::Down, KeyModifiers::NONE),
-        command: EditCommand::HistoryNext,
-    },
-    KeyBinding {
-        key: (KeyCode::Esc, KeyModifiers::NONE),
-        command: EditCommand::RestoreDraft,
-    },
-    KeyBinding {
-        key: (KeyCode::Tab, KeyModifiers::NONE),
-        command: EditCommand::Indent,
-    },
-    KeyBinding {
-        key: (KeyCode::BackTab, KeyModifiers::SHIFT),
-        command: EditCommand::Dedent,
-    },
-    KeyBinding {
-        key: (KeyCode::F(8), KeyModifiers::NONE),
-        command: EditCommand::HistoryRFind,
-    },
-    KeyBinding {
-        key: (KeyCode::Char('r'), KeyModifiers::CONTROL),
-        command: EditCommand::HistoryRFind,
-    },
-    KeyBinding {
-        key: (KeyCode::F(8), KeyModifiers::SHIFT),
-        command: EditCommand::HistoryFind,
-    },
-    KeyBinding {
-        key: (KeyCode::Char('s'), KeyModifiers::CONTROL),
-        command: EditCommand::HistoryFind,
-    },
-    KeyBinding {
-        key: (KeyCode::Char('i'), KeyModifiers::CONTROL),
-        command: EditCommand::CharInput('\t'),
-    },
-    KeyBinding {
-        key: (KeyCode::Left, KeyModifiers::CONTROL),
-        command: EditCommand::CursorSpanLeft,
-    },
-    KeyBinding {
-        key: (KeyCode::Right, KeyModifiers::CONTROL),
-        command: EditCommand::CursorSpanRight,
-    },
-    KeyBinding {
-        key: (KeyCode::Backspace, KeyModifiers::CONTROL),
-        command: EditCommand::DeleteSpanLeft,
-    },
-    KeyBinding {
-        key: (KeyCode::Delete, KeyModifiers::CONTROL),
-        command: EditCommand::DeleteSpanRight,
-    },
-];
+#[derive(Debug, Clone, PartialEq)]
+struct KeyMap {
+    bindings: Vec<KeyBinding>,
+}
 
+impl KeyMap {
+    fn get(&self, key: (KeyCode, KeyModifiers)) -> Option<EditCommand> {
+        let cmd = self
+            .bindings
+            .iter()
+            .find(|kb| kb.key == key)
+            .and_then(|kb| Some(kb.command));
+        if cmd.is_some() {
+            return cmd;
+        }
+
+        if let (KeyCode::Char(ch), KeyModifiers::NONE | KeyModifiers::SHIFT) =
+            key
+        {
+            return Some(EditCommand::CharInput(ch));
+        }
+
+        None
+    }
+}
+
+impl Default for KeyMap {
+    fn default() -> Self {
+        let mut bindings = Vec::new();
+        bindings.push(KeyBinding {
+            key: (KeyCode::Enter, KeyModifiers::NONE),
+            command: EditCommand::AcceptLine,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Left, KeyModifiers::NONE),
+            command: EditCommand::CursorLeft,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Right, KeyModifiers::NONE),
+            command: EditCommand::CursorRight,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Home, KeyModifiers::NONE),
+            command: EditCommand::CursorToStart,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Home, KeyModifiers::CONTROL),
+            command: EditCommand::DeleteToStart,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::End, KeyModifiers::NONE),
+            command: EditCommand::CursorToEnd,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::End, KeyModifiers::CONTROL),
+            command: EditCommand::DeleteToEnd,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Backspace, KeyModifiers::NONE),
+            command: EditCommand::Backspace,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Delete, KeyModifiers::NONE),
+            command: EditCommand::Delete,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Up, KeyModifiers::NONE),
+            command: EditCommand::HistoryNextBack,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Down, KeyModifiers::NONE),
+            command: EditCommand::HistoryNext,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Esc, KeyModifiers::NONE),
+            command: EditCommand::RestoreDraft,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Tab, KeyModifiers::NONE),
+            command: EditCommand::Indent,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::BackTab, KeyModifiers::SHIFT),
+            command: EditCommand::Dedent,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::F(8), KeyModifiers::NONE),
+            command: EditCommand::HistoryRFind,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Char('r'), KeyModifiers::CONTROL),
+            command: EditCommand::HistoryRFind,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::F(8), KeyModifiers::SHIFT),
+            command: EditCommand::HistoryFind,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Char('s'), KeyModifiers::CONTROL),
+            command: EditCommand::HistoryFind,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Char('i'), KeyModifiers::CONTROL),
+            command: EditCommand::CharInput('\t'),
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Left, KeyModifiers::CONTROL),
+            command: EditCommand::CursorSpanLeft,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Right, KeyModifiers::CONTROL),
+            command: EditCommand::CursorSpanRight,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Backspace, KeyModifiers::CONTROL),
+            command: EditCommand::DeleteSpanLeft,
+        });
+        bindings.push(KeyBinding {
+            key: (KeyCode::Delete, KeyModifiers::CONTROL),
+            command: EditCommand::DeleteSpanRight,
+        });
+        KeyMap { bindings }
+    }
+}
 #[cfg(test)]
 #[allow(clippy::unicode_not_nfc)]
 mod tests {
@@ -785,8 +792,10 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let res =
-            handle_event(&mut buf, &mut view, None, &Event::FocusLost).unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(&mut buf, &mut view, &Event::FocusLost)
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -801,13 +810,14 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -816,13 +826,14 @@ mod tests {
 
     #[test]
     fn enter_breaks_input_loop() {
-        let res = handle_event(
-            &mut String::new(),
-            &mut ViewBuilder::new().build(),
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut String::new(),
+                &mut ViewBuilder::new().build(),
+                &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_break());
     }
 
@@ -833,22 +844,30 @@ mod tests {
 
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Char('🎸'), KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('🎸'),
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue(),);
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('!'),
+                    KeyModifiers::SHIFT,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue(),);
 
@@ -865,16 +884,17 @@ mod tests {
         let mut view = vb.build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Char('\u{0308}'),
-                KeyModifiers::NONE,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('\u{0308}'),
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert!(buf.is_empty());
@@ -885,16 +905,17 @@ mod tests {
 
         let mut view = vb.with_insertion_point(buf.len()).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Char('\u{0308}'),
-                KeyModifiers::NONE,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('\u{0308}'),
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
@@ -908,13 +929,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, "AeZ");
@@ -928,13 +953,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, "AZ");
@@ -948,13 +977,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len() - 1).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, "az");
@@ -970,13 +1003,17 @@ mod tests {
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -991,13 +1028,14 @@ mod tests {
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1012,39 +1050,42 @@ mod tests {
         let mut vb = ViewBuilder::new();
 
         let mut view = vb.with_insertion_point(8).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), 4);
 
         let mut view = vb.with_insertion_point(4).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), 1);
 
         let mut view = vb.with_insertion_point(1).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
@@ -1059,13 +1100,14 @@ mod tests {
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1080,13 +1122,14 @@ mod tests {
         let mut vb = ViewBuilder::new();
         let mut view = vb.with_insertion_point(5).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1103,13 +1146,14 @@ mod tests {
             ViewBuilder::new().with_insertion_point(buf.len()).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1124,13 +1168,14 @@ mod tests {
         let mut vb = ViewBuilder::new();
         let mut view = vb.build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
@@ -1138,13 +1183,14 @@ mod tests {
 
         let mut view = vb.with_insertion_point(1).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
@@ -1152,13 +1198,14 @@ mod tests {
 
         let mut view = vb.with_insertion_point(4).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1167,13 +1214,14 @@ mod tests {
 
         let mut view = vb.with_insertion_point(8).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1190,13 +1238,14 @@ mod tests {
             ViewBuilder::new().with_insertion_point(buf.len()).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1210,13 +1259,14 @@ mod tests {
 
         let mut view = ViewBuilder::new().with_insertion_point(3).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1233,13 +1283,14 @@ mod tests {
             ViewBuilder::new().with_insertion_point(buf.len()).build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1252,25 +1303,27 @@ mod tests {
 
         let mut view = ViewBuilder::new().with_insertion_point(1).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "a🎸io");
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), 1);
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, "aio");
@@ -1278,13 +1331,14 @@ mod tests {
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), 1);
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "ao");
         assert!(!view.is_valid());
@@ -1300,13 +1354,17 @@ mod tests {
             .build();
         let expected_buf = buf.clone();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Home,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(view, expected_view);
@@ -1321,13 +1379,17 @@ mod tests {
             .with_state(ViewState::Valid)
             .build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Home,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, expected_buf);
@@ -1343,13 +1405,14 @@ mod tests {
             .build();
         let expected_buf = buf.clone();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(view, expected_view);
@@ -1364,13 +1427,14 @@ mod tests {
             .build();
         let expected_buf = "aë".to_owned();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert!(!view.is_valid());
@@ -1385,13 +1449,14 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue(),);
         assert_eq!(buf, expected_buf);
@@ -1406,13 +1471,14 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1427,13 +1493,14 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1448,20 +1515,21 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         let expected_view = view.clone();
 
-        let mut hs = Some(HistoryStack::new());
+        let hs = Some(HistoryStack::new());
         let expected_hs = hs.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(view, expected_view);
-        assert_eq!(hs, expected_hs);
+        assert_eq!(editor.history, expected_hs);
     }
 
     #[test]
@@ -1469,18 +1537,19 @@ mod tests {
         let mut buf = "123456789abc".to_owned();
         let mut view = ViewBuilder::new().build();
 
-        let mut hs = Some(HistoryStack::new());
+        let hs = Some(HistoryStack::new());
         let expected_hs =
             HistoryStackBuilder::new().with_entries(&["123456789abc"]).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_break());
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1492,21 +1561,21 @@ mod tests {
 
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder.with_draft(Some("123456789abc"));
-        let mut hs =
-            Some(hs_builder.with_entries(&["foo", "bar", "baz"]).build());
+        let hs = Some(hs_builder.with_entries(&["foo", "bar", "baz"]).build());
         let expected_hs = hs_builder.with_index(Some(2)).build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
     }
@@ -1522,42 +1591,43 @@ mod tests {
         hs_builder
             .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
-        let mut hs = Some(hs_builder.with_index(Some(1)).build());
+        let hs = Some(hs_builder.with_index(Some(1)).build());
         let expected_hs = hs_builder
             .with_entries(&["foo", "bar", "baz"])
             .with_index(Some(0))
             .build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
-        assert_eq!(hs.as_ref(), Some(&expected_hs));
+        assert_eq!(editor.history.as_ref(), Some(&expected_hs));
 
         let expected_hs = hs_builder
             .with_entries(&["foo", "bar", "baz", "foo"])
-            .with_index(None)
+            .with_index(Some(4))
             .with_draft(None)
             .build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_break());
         assert_eq!(&buf, expected_buf);
-        assert_eq!(hs.as_ref(), Some(&expected_hs));
+        assert_eq!(editor.history.as_ref(), Some(&expected_hs));
     }
 
     #[test]
@@ -1572,21 +1642,22 @@ mod tests {
             .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
         let expected_hs = hs_builder.with_index(Some(1)).build();
-        let mut hs = Some(hs_builder.with_index(Some(2)).build());
+        let hs = Some(hs_builder.with_index(Some(2)).build());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1600,23 +1671,24 @@ mod tests {
             .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
         let expected_hs = hs_builder.with_index(Some(0)).build();
-        let mut hs = Some(hs_builder.build());
+        let hs = Some(hs_builder.build());
 
         let expected_buf = buf.clone();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
         assert_eq!(view, expected_view);
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1631,21 +1703,22 @@ mod tests {
             .with_entries(&["foo", "bar", "baz"])
             .with_draft(Some("123456789abc"));
         let expected_hs = hs_builder.with_index(Some(1)).build();
-        let mut hs = Some(hs_builder.with_index(Some(0)).build());
+        let hs = Some(hs_builder.with_index(Some(0)).build());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1660,21 +1733,22 @@ mod tests {
         let mut hs_builder = HistoryStackBuilder::new();
         hs_builder.with_entries(&["foo", "bar", "baz"]);
         let expected_hs = hs_builder.with_draft(Some(draft)).build();
-        let mut hs = Some(hs_builder.with_index(Some(2)).build());
+        let hs = Some(hs_builder.with_index(Some(2)).build());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1682,7 +1756,7 @@ mod tests {
         let mut hs_builder = HistoryStackBuilder::new();
         let expected_hs =
             hs_builder.with_entries(&["foo", "bar", "baz"]).build();
-        let mut hs = Some(
+        let hs = Some(
             hs_builder
                 .with_draft(Some("123456789abc"))
                 .with_index(Some(0))
@@ -1694,19 +1768,20 @@ mod tests {
 
         let mut view = ViewBuilder::new().build();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(hs);
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert!(!view.is_valid());
         assert_eq!(view.insertion_point(), expected_buf.len());
-        assert_eq!(hs.unwrap(), expected_hs);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1717,13 +1792,14 @@ mod tests {
         let expected_buf = buf.clone();
         let expected_view = view.clone();
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(buf, expected_buf);
@@ -1740,71 +1816,25 @@ mod tests {
             .with_draft(Some("123456789abc"))
             .with_index(Some(0))
             .build();
+        let mut editor = LineEditor::with_history(Some(hs));
 
         let expected_buf = "123456789abc";
         let expected_hs =
             hs_builder.with_index(Some(3)).with_draft(None).build();
 
-        let mut hs = Some(hs);
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            hs.as_mut(),
-            &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .unwrap();
 
         assert!(res.is_continue());
         assert_eq!(&buf, expected_buf);
         assert_eq!(view.insertion_point(), expected_buf.len());
         assert!(!view.is_valid());
-        assert_eq!(hs.unwrap(), expected_hs);
-    }
-
-    #[test]
-    fn resize_with_no_change_does_nothing() {
-        let size = DimWH(10, 5);
-        let cursor_pos = Coord2D(11, 0);
-
-        let buf = "buffer text".to_owned();
-
-        let mut view = ViewBuilder::new()
-            .with_size(size)
-            .with_insertion_point(buf.len())
-            .with_cursor_position(cursor_pos)
-            .build();
-        let expected_view = view.clone();
-
-        let res = handle_resize(&buf, &mut view, size, cursor_pos);
-
-        assert!(res.is_continue());
-        assert_eq!(view, expected_view);
-    }
-
-    #[test]
-    fn resize_saves_values_and_revalidates() {
-        let buf =
-            "0123456789012345678901234567890123456789012345678".to_owned();
-
-        let mut vb = ViewBuilder::new();
-        let mut view = vb
-            .with_insertion_point(buf.len())
-            .with_size(DimWH(80, 24))
-            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
-            .with_first_display_line(23)
-            .build();
-
-        let expected_view = vb
-            .with_size(DimWH(10, 5))
-            .with_first_display_line(0)
-            .with_cursor_position(Coord2D(0, 4))
-            .with_visible_chars(9..buf.len())
-            .build();
-        let res = handle_resize(&buf, &mut view, DimWH(10, 5), Coord2D(0, 4));
-
-        assert!(res.is_continue());
-        assert!(view.is_valid());
-        assert_eq!(view, expected_view);
+        assert_eq!(editor.history.unwrap(), expected_hs);
     }
 
     #[test]
@@ -1818,16 +1848,17 @@ mod tests {
             .with_first_display_line(23)
             .build();
 
-        let mut hs = HistoryStackBuilder::new()
+        let hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
             .build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(Some(hs));
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "old");
@@ -1845,27 +1876,28 @@ mod tests {
             .with_first_display_line(23)
             .build();
 
-        let mut hs = HistoryStackBuilder::new()
+        let hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
             .build();
-        let _ = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(Some(hs));
+        let _ = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+            )
+            .unwrap();
         buf.replace_range(.., "ne");
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(
-                KeyCode::Char('r'),
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('r'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "newest");
         assert_eq!(view.insertion_point(), 2);
@@ -1882,16 +1914,17 @@ mod tests {
             .with_first_display_line(23)
             .build();
 
-        let mut hs = HistoryStackBuilder::new()
+        let hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
             .build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(Some(hs));
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "oldest");
@@ -1909,27 +1942,28 @@ mod tests {
             .with_first_display_line(23)
             .build();
 
-        let mut hs = HistoryStackBuilder::new()
+        let hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
             .build();
-        let _ = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::with_history(Some(hs));
+        let _ = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
+            )
+            .unwrap();
         buf.replace_range(.., "ne");
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            Some(&mut hs),
-            &Event::Key(KeyEvent::new(
-                KeyCode::Char('s'),
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('s'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "newest");
         assert_eq!(view.insertion_point(), 2);
@@ -1939,16 +1973,17 @@ mod tests {
     fn ctrl_i_inputs_tab() {
         let mut buf = "text".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(1).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Char('i'),
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('i'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "t\text");
         assert_eq!(view.insertion_point(), 2);
@@ -1959,13 +1994,14 @@ mod tests {
         let mut buf = "\tline".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "\t\tline");
@@ -1976,26 +2012,28 @@ mod tests {
     fn tab_indents_with_spaces() {
         let mut buf = "line".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "    line");
         assert_eq!(view.insertion_point(), 6);
         let mut buf = "     line".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(6).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "        line");
@@ -2007,26 +2045,28 @@ mod tests {
         let mut buf = "     \tline".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "        \tline");
         assert_eq!(view.insertion_point(), buf.len());
 
         let mut buf = "\t\t  line".to_owned();
         view.set_insertion_point(buf.len());
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "\t\t\t  line");
         assert_eq!(view.insertion_point(), buf.len());
@@ -2036,13 +2076,17 @@ mod tests {
     fn backtab_dedents_with_tab() {
         let mut buf = "\t\tline".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(5).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buf, "\tline");
         assert_eq!(view.insertion_point(), 4);
@@ -2052,13 +2096,17 @@ mod tests {
     fn backtab_dedents_with_spaces() {
         let mut buf = "        line".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(10).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(!view.is_valid());
         assert_eq!(&buf, "    line");
@@ -2071,13 +2119,17 @@ mod tests {
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
         let expected_buf = buf.clone();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(buf, expected_buf);
@@ -2088,24 +2140,32 @@ mod tests {
     fn cursor_span_right_jumps_to_next_word() {
         let mut buf = "word \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(8, view.insertion_point());
         assert!(!view.is_valid());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(12, view.insertion_point());
     }
@@ -2116,13 +2176,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
@@ -2134,13 +2198,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
@@ -2151,34 +2219,46 @@ mod tests {
         let mut buf = "    word \t  (())".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len() - 2).build();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(12, view.insertion_point());
         assert!(!view.is_valid());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(4, view.insertion_point());
 
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(0, view.insertion_point());
     }
@@ -2188,13 +2268,17 @@ mod tests {
         let mut buf = "chars".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
@@ -2205,13 +2289,17 @@ mod tests {
         let mut buf = String::new();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buf,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buf,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
@@ -2224,13 +2312,17 @@ mod tests {
         let mut view =
             ViewBuilder::new().with_insertion_point(buffer.len()).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buffer, expected_buffer);
         assert_eq!(view, expected_view);
@@ -2241,35 +2333,47 @@ mod tests {
         let mut buffer = "    word    \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "  word    \t  (())");
         assert_eq!(view.insertion_point(), 2);
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "  (())");
         assert_eq!(view.insertion_point(), 2);
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL)),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "  ");
         assert_eq!(view.insertion_point(), 2);
@@ -2280,44 +2384,47 @@ mod tests {
         let mut buffer = "    word    \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(17).build();
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Backspace,
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "    word    \t  ))");
         assert_eq!(view.insertion_point(), 15);
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Backspace,
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "    ))");
         assert_eq!(view.insertion_point(), 4);
 
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Backspace,
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(&buffer, "))");
         assert_eq!(view.insertion_point(), 0);
@@ -2329,16 +2436,17 @@ mod tests {
         let expected_buffer = buffer.clone();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
-        let res = handle_event(
-            &mut buffer,
-            &mut view,
-            None,
-            &Event::Key(KeyEvent::new(
-                KeyCode::Backspace,
-                KeyModifiers::CONTROL,
-            )),
-        )
-        .unwrap();
+        let mut editor = LineEditor::new();
+        let res = editor
+            .handle_event(
+                &mut buffer,
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
         assert!(res.is_continue());
         assert_eq!(buffer, expected_buffer);
         assert_eq!(view, expected_view);

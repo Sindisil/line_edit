@@ -544,4 +544,48 @@ pub(crate) mod tests {
         assert_eq!(view, expected_view);
         assert_eq!(scroll_lines, Some(1));
     }
+
+    #[test]
+    fn resize_with_no_change_does_nothing() {
+        let size = DimWH(10, 5);
+        let cursor_pos = Coord2D(11, 0);
+
+        let buf = "buffer text".to_owned();
+
+        let mut view = ViewBuilder::new()
+            .with_size(size)
+            .with_insertion_point(buf.len())
+            .with_cursor_position(cursor_pos)
+            .build();
+        let expected_view = view.clone();
+
+        view.resize(size, cursor_pos, &buf);
+
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn resize_saves_values_and_revalidates() {
+        let buf =
+            "0123456789012345678901234567890123456789012345678".to_owned();
+
+        let mut vb = ViewBuilder::new();
+        let mut view = vb
+            .with_insertion_point(buf.len())
+            .with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_first_display_line(23)
+            .build();
+
+        let expected_view = vb
+            .with_size(DimWH(10, 5))
+            .with_first_display_line(0)
+            .with_cursor_position(Coord2D(0, 4))
+            .with_visible_chars(9..buf.len())
+            .build();
+        view.resize(DimWH(10, 5), Coord2D(0, 4), &buf);
+
+        assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
 }
