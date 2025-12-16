@@ -456,11 +456,49 @@ fn do_history_rfind(
     ControlFlow::Continue(())
 }
 
+// Shift the "word" (i.e., span of printable characters) at or after
+// the cursor to the next tab stop.
+// If the indent will be at start of line, and the first character
+// on the line is a tab ('\t'), insert an additional tab at
+// start of line. Otherwise, insert enough spaces (' ') to shift
+// the "word" to the next tab stop.
 fn do_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
-    // If the first buffer char is tab ('\t'), insert one additional
-    // tab at start of line. If not, insert up to 4 space (' ') chars
-    // at start of line, so that leading spaces are the next multiple
-    // of four.
+/* new impl
+    let in_word = s[ip..]
+        .graphemes(true)
+        .next()
+        .and_then(|gr| gr.chars().find(|c| !c.is_whitespace()))
+        .is_some();
+    eprintln!("{in_word:?}");
+    let indent_idx = if !in_word {
+        // not in word ... scan forward to first printable char or end of line
+        s[ip..]
+            .grapheme_indices(true)
+            .find(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
+            .map_or(s.len(), |(i, _)| i + ip)
+    } else {
+        // in word ... scan backward to previous printable char;
+        s[..=ip]
+            .grapheme_indices(true)
+            .rev()
+            .take_while(|(_, gr)| gr.contains(|c: char| !c.is_whitespace()))
+            .last()
+            .expect("at least one char if in word")
+            .0
+    };
+    let to_add = 4;
+    let indent = if s.chars().next().is_some_and(|c| c == '\t')
+        && s[..indent_idx].chars().all(|c| c.is_whitespace())
+    {
+        "\t"
+    } else {
+        &"    "[..to_add]
+    };
+
+    eprintln!("{indent:?}");
+    s.insert_str(indent_idx, indent);
+*/
+
     if buffer.starts_with('\t') {
         buffer.insert(0, '\t');
         view.set_insertion_point(view.insertion_point() + 1);
@@ -474,6 +512,13 @@ fn do_indent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
+// Shift the "word" (i.e., span of printable characters) at or after
+// the cursor to the previous tab stop.
+//
+// If the dedent will be at start of line, and the first character
+// on the line is a tab ('\t'), delete the first tab. Otherwise spaces
+// (' ') before immediately before the "word" are deleted until it is shifted
+// to the previous tab stop or all spaces are consumed.
 fn do_dedent(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     // If the first buffer char is tab ('\t'), delete it.
     // If not, delete up to 4 leading spaces so that the
