@@ -21,6 +21,7 @@
 mod history_stack;
 mod renderer;
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
@@ -227,8 +228,8 @@ impl LineEditor {
             EditCommand::RestoreDraft => {
                 do_restore_draft(buffer, view, history)
             }
-            EditCommand::CursorLeft => do_cursor_left(buffer, view),
-            EditCommand::CursorRight => do_cursor_right(buffer, view),
+            EditCommand::CursorBack => do_cursor_back(buffer, view),
+            EditCommand::CursorForward => do_cursor_forward(buffer, view),
             EditCommand::CursorToStart => do_cursor_to_start(view),
             EditCommand::CursorToEnd => do_cursor_to_end(buffer, view),
             EditCommand::DeleteToStart => do_delete_to_start(buffer, view),
@@ -240,10 +241,14 @@ impl LineEditor {
             EditCommand::HistoryFind => do_history_find(buffer, view, history),
             EditCommand::Indent => do_indent(buffer, view),
             EditCommand::Dedent => do_dedent(buffer, view),
-            EditCommand::CursorSpanLeft => do_cursor_span_left(buffer, view),
-            EditCommand::CursorSpanRight => do_cursor_span_right(buffer, view),
-            EditCommand::DeleteSpanLeft => do_delete_span_left(buffer, view),
-            EditCommand::DeleteSpanRight => do_delete_span_right(buffer, view),
+            EditCommand::CursorSpanBack => do_cursor_span_back(buffer, view),
+            EditCommand::CursorSpanForward => {
+                do_cursor_span_forward(buffer, view)
+            }
+            EditCommand::DeleteSpanBack => do_delete_span_back(buffer, view),
+            EditCommand::DeleteSpanForward => {
+                do_delete_span_forward(buffer, view)
+            }
         }
     }
 }
@@ -348,7 +353,7 @@ fn do_backspace(buffer: &mut String, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn do_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_back(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() != 0
         && let Some((prev_idx, _)) = buffer[..view.insertion_point()]
             .char_indices()
@@ -360,7 +365,7 @@ fn do_cursor_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn do_cursor_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_forward(buffer: &str, view: &mut View) -> ControlFlow<()> {
     // If aleady at end, nothing to do
     if view.insertion_point() != buffer.len() {
         let next_idx = buffer[view.insertion_point()..]
@@ -520,7 +525,7 @@ fn span_type(s: &str) -> SpanType {
     }
 }
 
-fn do_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_span_back(buffer: &str, view: &mut View) -> ControlFlow<()> {
     if view.insertion_point() == 0 {
         return ControlFlow::Continue(());
     }
@@ -545,7 +550,7 @@ fn do_cursor_span_left(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn do_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
+fn do_cursor_span_forward(buffer: &str, view: &mut View) -> ControlFlow<()> {
     let mut gr_idxs = buffer
         .grapheme_indices(true)
         .skip_while(|(i, _)| *i < view.insertion_point());
@@ -567,7 +572,7 @@ fn do_cursor_span_right(buffer: &str, view: &mut View) -> ControlFlow<()> {
     ControlFlow::Continue(())
 }
 
-fn do_delete_span_left(
+fn do_delete_span_back(
     buffer: &mut String,
     view: &mut View,
 ) -> ControlFlow<()> {
@@ -592,7 +597,7 @@ fn do_delete_span_left(
     ControlFlow::Continue(())
 }
 
-fn do_delete_span_right(
+fn do_delete_span_forward(
     buffer: &mut String,
     view: &mut View,
 ) -> ControlFlow<()> {
@@ -625,8 +630,8 @@ enum EditCommand {
     HistoryNextBack,
     HistoryNext,
     RestoreDraft,
-    CursorLeft,
-    CursorRight,
+    CursorBack,
+    CursorForward,
     CursorToStart,
     CursorToEnd,
     DeleteToStart,
@@ -636,30 +641,21 @@ enum EditCommand {
     HistoryFind,
     Indent,
     Dedent,
-    CursorSpanLeft,
-    CursorSpanRight,
-    DeleteSpanLeft,
-    DeleteSpanRight,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct KeyBinding {
-    key: (KeyCode, KeyModifiers),
-    command: EditCommand,
+    CursorSpanBack,
+    CursorSpanForward,
+    DeleteSpanBack,
+    DeleteSpanForward,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct KeyMap {
-    bindings: Vec<KeyBinding>,
+    bindings: HashMap<(KeyCode, KeyModifiers), EditCommand>,
 }
 
 impl KeyMap {
     fn get(&self, key: (KeyCode, KeyModifiers)) -> Option<EditCommand> {
-        let cmd = self
-            .bindings
-            .iter()
-            .find(|kb| kb.key == key)
-            .and_then(|kb| Some(kb.command));
+        let cmd = self.bindings.get(&key).cloned();
+
         if cmd.is_some() {
             return cmd;
         }
@@ -676,99 +672,158 @@ impl KeyMap {
 
 impl Default for KeyMap {
     fn default() -> Self {
-        let mut bindings = Vec::new();
-        bindings.push(KeyBinding {
-            key: (KeyCode::Enter, KeyModifiers::NONE),
-            command: EditCommand::AcceptLine,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Left, KeyModifiers::NONE),
-            command: EditCommand::CursorLeft,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Right, KeyModifiers::NONE),
-            command: EditCommand::CursorRight,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Home, KeyModifiers::NONE),
-            command: EditCommand::CursorToStart,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Home, KeyModifiers::CONTROL),
-            command: EditCommand::DeleteToStart,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::End, KeyModifiers::NONE),
-            command: EditCommand::CursorToEnd,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::End, KeyModifiers::CONTROL),
-            command: EditCommand::DeleteToEnd,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Backspace, KeyModifiers::NONE),
-            command: EditCommand::Backspace,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Delete, KeyModifiers::NONE),
-            command: EditCommand::Delete,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Up, KeyModifiers::NONE),
-            command: EditCommand::HistoryNextBack,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Down, KeyModifiers::NONE),
-            command: EditCommand::HistoryNext,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Esc, KeyModifiers::NONE),
-            command: EditCommand::RestoreDraft,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Tab, KeyModifiers::NONE),
-            command: EditCommand::Indent,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::BackTab, KeyModifiers::SHIFT),
-            command: EditCommand::Dedent,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::F(8), KeyModifiers::NONE),
-            command: EditCommand::HistoryRFind,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Char('r'), KeyModifiers::CONTROL),
-            command: EditCommand::HistoryRFind,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::F(8), KeyModifiers::SHIFT),
-            command: EditCommand::HistoryFind,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Char('s'), KeyModifiers::CONTROL),
-            command: EditCommand::HistoryFind,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Char('i'), KeyModifiers::CONTROL),
-            command: EditCommand::CharInput('\t'),
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Left, KeyModifiers::CONTROL),
-            command: EditCommand::CursorSpanLeft,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Right, KeyModifiers::CONTROL),
-            command: EditCommand::CursorSpanRight,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Backspace, KeyModifiers::CONTROL),
-            command: EditCommand::DeleteSpanLeft,
-        });
-        bindings.push(KeyBinding {
-            key: (KeyCode::Delete, KeyModifiers::CONTROL),
-            command: EditCommand::DeleteSpanRight,
-        });
+        let mut bindings = HashMap::new();
+
+        // Common
+        bindings.insert(
+            (KeyCode::Enter, KeyModifiers::NONE),
+            EditCommand::AcceptLine,
+        );
+        bindings
+            .insert((KeyCode::Tab, KeyModifiers::NONE), EditCommand::Indent);
+        bindings.insert(
+            (KeyCode::BackTab, KeyModifiers::SHIFT),
+            EditCommand::Dedent,
+        );
+        bindings.insert(
+            (KeyCode::Char('i'), KeyModifiers::CONTROL),
+            EditCommand::CharInput('\t'),
+        );
+        bindings.insert(
+            (KeyCode::Backspace, KeyModifiers::NONE),
+            EditCommand::Backspace,
+        );
+
+        // Windows style
+        bindings.insert(
+            (KeyCode::Left, KeyModifiers::NONE),
+            EditCommand::CursorBack,
+        );
+        bindings.insert(
+            (KeyCode::Right, KeyModifiers::NONE),
+            EditCommand::CursorForward,
+        );
+        bindings.insert(
+            (KeyCode::Home, KeyModifiers::NONE),
+            EditCommand::CursorToStart,
+        );
+        bindings.insert(
+            (KeyCode::Home, KeyModifiers::CONTROL),
+            EditCommand::DeleteToStart,
+        );
+        bindings.insert(
+            (KeyCode::End, KeyModifiers::NONE),
+            EditCommand::CursorToEnd,
+        );
+        bindings.insert(
+            (KeyCode::End, KeyModifiers::CONTROL),
+            EditCommand::DeleteToEnd,
+        );
+        bindings.insert(
+            (KeyCode::Backspace, KeyModifiers::NONE),
+            EditCommand::Backspace,
+        );
+        bindings
+            .insert((KeyCode::Delete, KeyModifiers::NONE), EditCommand::Delete);
+        bindings.insert(
+            (KeyCode::Up, KeyModifiers::NONE),
+            EditCommand::HistoryNextBack,
+        );
+        bindings.insert(
+            (KeyCode::Down, KeyModifiers::NONE),
+            EditCommand::HistoryNext,
+        );
+        bindings.insert(
+            (KeyCode::F(8), KeyModifiers::NONE),
+            EditCommand::HistoryRFind,
+        );
+        bindings.insert(
+            (KeyCode::F(8), KeyModifiers::SHIFT),
+            EditCommand::HistoryFind,
+        );
+        bindings.insert(
+            (KeyCode::Esc, KeyModifiers::NONE),
+            EditCommand::RestoreDraft,
+        );
+        bindings.insert(
+            (KeyCode::Left, KeyModifiers::CONTROL),
+            EditCommand::CursorSpanBack,
+        );
+        bindings.insert(
+            (KeyCode::Right, KeyModifiers::CONTROL),
+            EditCommand::CursorSpanForward,
+        );
+        bindings.insert(
+            (KeyCode::Backspace, KeyModifiers::CONTROL),
+            EditCommand::DeleteSpanBack,
+        );
+        bindings.insert(
+            (KeyCode::Delete, KeyModifiers::CONTROL),
+            EditCommand::DeleteSpanForward,
+        );
+
+        // Bash/emacs style
+        bindings.insert(
+            (KeyCode::Char('b'), KeyModifiers::CONTROL),
+            EditCommand::CursorBack,
+        );
+        bindings.insert(
+            (KeyCode::Char('f'), KeyModifiers::CONTROL),
+            EditCommand::CursorForward,
+        );
+        bindings.insert(
+            (KeyCode::Char('a'), KeyModifiers::CONTROL),
+            EditCommand::CursorToStart,
+        );
+        bindings.insert(
+            (KeyCode::Char('e'), KeyModifiers::CONTROL),
+            EditCommand::CursorToEnd,
+        );
+        bindings.insert(
+            (KeyCode::Char('k'), KeyModifiers::CONTROL),
+            EditCommand::DeleteToEnd,
+        );
+        bindings.insert(
+            (KeyCode::Char('d'), KeyModifiers::CONTROL),
+            EditCommand::Delete,
+        );
+        bindings.insert(
+            (KeyCode::Char('p'), KeyModifiers::CONTROL),
+            EditCommand::HistoryNextBack,
+        );
+        bindings.insert(
+            (KeyCode::Char('n'), KeyModifiers::CONTROL),
+            EditCommand::HistoryNext,
+        );
+        bindings.insert(
+            (KeyCode::Char('r'), KeyModifiers::CONTROL),
+            EditCommand::HistoryRFind,
+        );
+        bindings.insert(
+            (KeyCode::Char('s'), KeyModifiers::CONTROL),
+            EditCommand::HistoryFind,
+        );
+        bindings.insert(
+            (KeyCode::Char('g'), KeyModifiers::CONTROL),
+            EditCommand::RestoreDraft,
+        );
+        bindings.insert(
+            (KeyCode::Char('b'), KeyModifiers::ALT),
+            EditCommand::CursorSpanBack,
+        );
+        bindings.insert(
+            (KeyCode::Char('f'), KeyModifiers::ALT),
+            EditCommand::CursorSpanForward,
+        );
+        bindings.insert(
+            (KeyCode::Delete, KeyModifiers::ALT),
+            EditCommand::DeleteSpanBack,
+        );
+        bindings.insert(
+            (KeyCode::Char('d'), KeyModifiers::ALT),
+            EditCommand::DeleteSpanForward,
+        );
+
         KeyMap { bindings }
     }
 }
@@ -2137,7 +2192,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_right_jumps_to_next_word() {
+    fn cursor_span_forward_jumps_to_next_word() {
         let mut buf = "word \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
         let mut editor = LineEditor::new();
@@ -2171,7 +2226,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_right_nop_at_end() {
+    fn cursor_span_forward_nop_at_end() {
         let mut buf = "chars".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
@@ -2193,7 +2248,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_right_nop_on_empty_buffer() {
+    fn cursor_span_forward_nop_on_empty_buffer() {
         let mut buf = String::new();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len()).build();
@@ -2215,7 +2270,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_left_jumps_to_start_of_previous_word() {
+    fn cursor_span_back_jumps_to_start_of_previous_word() {
         let mut buf = "    word \t  (())".to_owned();
         let mut view =
             ViewBuilder::new().with_insertion_point(buf.len() - 2).build();
@@ -2264,7 +2319,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_left_nop_at_start() {
+    fn cursor_span_back_nop_at_start() {
         let mut buf = "chars".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
@@ -2285,7 +2340,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_span_left_nop_on_empty_buffer() {
+    fn cursor_span_back_nop_on_empty_buffer() {
         let mut buf = String::new();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
         let expected_view = view.clone();
@@ -2306,7 +2361,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_span_right_nop_at_end() {
+    fn delete_span_forward_nop_at_end() {
         let mut buffer = "    word    \t  (())".to_owned();
         let expected_buffer = buffer.clone();
         let mut view =
@@ -2329,7 +2384,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_span_right_deletes_to_next_span_end() {
+    fn delete_span_forward_deletes_to_next_span_end() {
         let mut buffer = "    word    \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(2).build();
 
@@ -2380,7 +2435,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_span_left_deletes_to_previous_span_start() {
+    fn delete_span_back_deletes_to_previous_span_start() {
         let mut buffer = "    word    \t  (())".to_owned();
         let mut view = ViewBuilder::new().with_insertion_point(17).build();
 
@@ -2431,7 +2486,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_span_left_at_start_is_nop() {
+    fn delete_span_back_at_start_is_nop() {
         let mut buffer = "    word    \t  (())".to_owned();
         let expected_buffer = buffer.clone();
         let mut view = ViewBuilder::new().with_insertion_point(0).build();
