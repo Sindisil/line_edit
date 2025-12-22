@@ -13,6 +13,8 @@ use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
 use crossterm::terminal::ScrollUp;
 
+use crate::LineEditor;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct View {
     size: DimWH,
@@ -20,7 +22,6 @@ pub struct View {
     cursor_position: Coord2D,
     visible_chars: Range<usize>,
     prompt: Option<char>,
-    insertion_point: usize,
     state: ViewState,
 }
 
@@ -76,7 +77,6 @@ impl View {
             visible_chars: 0..0,
             prompt,
             state: ViewState::Invalid,
-            insertion_point: 0,
         }
     }
 
@@ -88,20 +88,11 @@ impl View {
         self.state == ViewState::Valid
     }
 
-    pub fn set_insertion_point(&mut self, i: usize) {
-        self.insertion_point = i;
-        self.state = ViewState::Invalid;
-    }
-
-    pub fn insertion_point(&self) -> usize {
-        self.insertion_point
-    }
-
     pub fn resize(
         &mut self,
         size: DimWH,
         cursor_position: Coord2D,
-        buffer: &str,
+        editor: &LineEditor,
     ) {
         // If nothing has changed, nothing to do
         if self.size == size && self.cursor_position == cursor_position {
@@ -111,12 +102,12 @@ impl View {
         self.size = size;
         self.cursor_position = cursor_position;
 
-        let buf_lines = self.wrap_buffer_lines(buffer);
+        let buf_lines = self.wrap_lines(editor);
 
         let ip_buf_line = buf_lines
             .iter()
-            .position(|l| l.contains(&self.insertion_point))
-            .expect("insertion_point is in or just after buffer");
+            .position(|l| l.contains(&editor.line_cursor))
+            .expect("line_cursor is in or just after buffer");
 
         let first_visible_buf_line =
             ip_buf_line.saturating_sub(usize::from(self.cursor_position.1));
@@ -133,27 +124,26 @@ impl View {
         self.visible_chars.end = buf_lines[last_visible_buf_line].end
             - usize::from(
                 last_visible_buf_line == ip_buf_line
-                    && self.insertion_point == buffer.len(),
+                    && editor.line_cursor == editor.line.len(),
             );
         self.state = ViewState::Valid;
     }
 
-    /// If View isn't in a Valid state (i.e., `insertion_point`
-    /// has changed), update and return wrapped buffer lines
-    /// and amount view needs to scroll, otherwise return None.
-    fn update(&mut self, buffer: &str) -> Option<u16> {
+    /// If View isn't in a Valid state, update and return wrapped
+    /// buffer lines and amount view needs to scroll, otherwise return None.
+    fn update(&mut self, editor: &LineEditor) -> Option<u16> {
         if self.is_valid() {
             return None;
         }
 
-        let buf_lines = self.wrap_buffer_lines(buffer);
+        let buf_lines = self.wrap_lines(editor);
 
         let mut scroll_lines = 0;
 
         let ip_buf_line = buf_lines
             .iter()
-            .position(|s| s.contains(&self.insertion_point))
-            .expect("insertion_point is in or just after buffer");
+            .position(|s| s.contains(&editor.line_cursor))
+            .expect("line_cursor is in or just after buffer");
 
         let prompt_width = if ip_buf_line == 0 {
             self.prompt.map_or(0, |p| char_width(p, 0))
@@ -171,13 +161,13 @@ impl View {
 
         let new_cursor_x = prompt_width
             + str_width(
-                &buffer[buf_lines[ip_buf_line].start..self.insertion_point],
+                &editor.line[buf_lines[ip_buf_line].start..editor.line_cursor],
                 prompt_width,
             );
 
         let new_cursor_y = if first_visible_line + lines_to_bottom < ip_buf_line
         {
-            // insertion_point below display
+            // line_cursor below display
             let delta = ip_buf_line - (first_visible_line + lines_to_bottom);
             scroll_lines = u16::try_from(cmp::min(
                 usize::from(self.first_display_line),
@@ -206,7 +196,7 @@ impl View {
         self.visible_chars.end = buf_lines[last_visible_line].end
             - usize::from(
                 last_visible_line == ip_buf_line
-                    && self.insertion_point == buffer.len(),
+                    && editor.line_cursor == editor.line.len(),
             );
 
         self.state = ViewState::Valid;
@@ -214,8 +204,8 @@ impl View {
     }
 
     /// render current buffer to display
-    pub fn repaint(&mut self, buffer: &str) -> io::Result<()> {
-        let Some(scroll_lines) = self.update(buffer) else {
+    pub fn repaint(&mut self, editor: &LineEditor) -> io::Result<()> {
+        let Some(scroll_lines) = self.update(editor) else {
             return Ok(());
         };
 
@@ -236,7 +226,7 @@ impl View {
             stdout,
             "{}{}",
             self.prompt.unwrap_or_default(),
-            &buffer[self.visible_chars.clone()],
+            &editor.line[self.visible_chars.clone()],
         )?;
 
         stdout
@@ -250,12 +240,12 @@ impl View {
     /// to display width, leaving room for cursor
     /// at end if necessary.
     #[must_use]
-    fn wrap_buffer_lines(&self, buffer: &str) -> Vec<Range<usize>> {
+    fn wrap_lines(&self, editor: &LineEditor) -> Vec<Range<usize>> {
         let mut lines = Vec::new();
         let mut cols = self.prompt.map_or(0, |ch| char_width(ch, 0));
         let mut begin = 0;
         let mut end;
-        for (i, ch) in buffer.char_indices() {
+        for (i, ch) in editor.line.char_indices() {
             let w = char_width(ch, cols);
             end = i;
             if self.size.0 - cols < w {
@@ -267,13 +257,13 @@ impl View {
         }
 
         // leave room for cursor at end, if necessary
-        end = buffer.len();
-        if self.insertion_point == end {
+        end = editor.line.len();
+        if editor.line_cursor == end {
             if cols == self.size.0 {
                 lines.push(begin..end);
                 begin = end;
             }
-            end = buffer.len() + 1;
+            end = editor.line.len() + 1;
         }
         lines.push(begin..end);
 
@@ -298,7 +288,6 @@ pub(crate) mod tests {
         cursor_position: Coord2D,
         visible_chars: Range<usize>,
         prompt: Option<char>,
-        insertion_point: usize,
         state: ViewState,
     }
 
@@ -310,7 +299,6 @@ pub(crate) mod tests {
                 cursor_position: Coord2D(0, 0),
                 visible_chars: 0..0,
                 prompt: Some(':'),
-                insertion_point: 0,
                 state: ViewState::Valid,
             }
         }
@@ -321,7 +309,6 @@ pub(crate) mod tests {
             v.cursor_position = self.cursor_position;
             v.visible_chars.start = self.visible_chars.start;
             v.visible_chars.end = self.visible_chars.end;
-            v.insertion_point = self.insertion_point;
             v.state = self.state;
             v
         }
@@ -351,11 +338,6 @@ pub(crate) mod tests {
             self
         }
 
-        pub fn with_insertion_point(&mut self, i: usize) -> &mut Self {
-            self.insertion_point = i;
-            self
-        }
-
         pub fn with_state(&mut self, s: ViewState) -> &mut Self {
             self.state = s;
             self
@@ -380,13 +362,12 @@ pub(crate) mod tests {
 
     #[test]
     fn update_empty_buffer_with_prompt() {
-        let buffer = String::new();
+        let editor = LineEditor::new();
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_prompt(Some(':'))
             .with_size(DimWH(80, 24))
-            .with_insertion_point(0)
             .with_cursor_position(Coord2D(0, 23))
             .with_first_display_line(23)
             .with_state(ViewState::Invalid)
@@ -398,7 +379,7 @@ pub(crate) mod tests {
             .with_state(ViewState::Valid)
             .build();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(view, expected_view);
         assert_eq!(scroll_lines, Some(0));
@@ -406,13 +387,12 @@ pub(crate) mod tests {
 
     #[test]
     fn update_one_char_added() {
-        let buffer = "\u{1f3b8}".to_owned();
+        let editor = LineEditor::from("\u{1f3b8}");
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_prompt(Some(':'))
             .with_size(DimWH(80, 24))
-            .with_insertion_point(buffer.len())
             .with_cursor_position(Coord2D(1, 23))
             .with_first_display_line(23)
             .with_state(ViewState::Invalid)
@@ -421,45 +401,46 @@ pub(crate) mod tests {
 
         let expected_view = vb
             .with_cursor_position(Coord2D(3, 23))
-            .with_visible_chars(0..buffer.len())
+            .with_visible_chars(0..editor.line.len())
             .with_state(ViewState::Valid)
             .build();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(scroll_lines, Some(0));
         assert_eq!(view, expected_view);
     }
 
     #[test]
-    fn update_ip_moved_above_display() {
-        let buffer = "012345678\
-                      9012345678\
-                      9012345678\
-                      9012345678\
-                      9012345678\
-                      9012345678"
-            .to_owned();
+    fn line_cursor_moved_above_display() {
+        let mut editor = LineEditor::from(
+            "012345678\
+             9012345678\
+             9012345678\
+             9012345678\
+             9012345678\
+             9012345678",
+        );
+        editor.line_cursor = 0;
 
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_size(DimWH(10, 5))
             .with_prompt(Some(':'))
-            .with_insertion_point(0) // ip moved to start
             .with_cursor_position(Coord2D(0, 4)) // ip was at end
             .with_first_display_line(0)
-            .with_visible_chars(19..buffer.len())
+            .with_visible_chars(19..editor.line.len())
             .with_state(ViewState::Invalid)
             .build();
 
         let expected_view = vb
             .with_cursor_position(Coord2D(1, 0)) // cursor at start of input
-            .with_visible_chars(0..buffer.len() - 10) // view moved up one line
+            .with_visible_chars(0..editor.line.len() - 10) // view moved up one line
             .with_state(ViewState::Valid)
             .build();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(scroll_lines, Some(0));
         assert_eq!(view, expected_view);
@@ -467,25 +448,24 @@ pub(crate) mod tests {
 
     #[test]
     fn update_on_valid_view_is_nop() {
-        let buffer = "buffer text".to_owned();
+        let editor = LineEditor::from("buffer text");
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_size(DimWH(80, 24))
             .with_prompt(Some(':'))
-            .with_insertion_point(buffer.len())
             .with_cursor_position(Coord2D(
-                u16::try_from(buffer.len()).unwrap() + 1,
+                u16::try_from(editor.line.len()).unwrap() + 1,
                 23,
             ))
             .with_first_display_line(23)
-            .with_visible_chars(0..buffer.len())
+            .with_visible_chars(0..editor.line.len())
             .with_state(ViewState::Valid)
             .build();
 
         let expected_view = view.clone();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(scroll_lines, None);
         assert_eq!(view, expected_view);
@@ -493,16 +473,15 @@ pub(crate) mod tests {
 
     #[test]
     fn update_backspace_past_column_0() {
-        let buffer = "12345678".to_owned();
+        let editor = LineEditor::from("12345678");
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_size(DimWH(10, 5))
             .with_prompt(Some(':'))
-            .with_insertion_point(buffer.len())
             .with_cursor_position(Coord2D(0, 4))
             .with_first_display_line(3)
-            .with_visible_chars(0..buffer.len())
+            .with_visible_chars(0..editor.line.len())
             .with_state(ViewState::Invalid)
             .build();
 
@@ -511,7 +490,7 @@ pub(crate) mod tests {
             .with_state(ViewState::Valid)
             .build();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(scroll_lines, Some(0));
         assert_eq!(view, expected_view);
@@ -519,13 +498,12 @@ pub(crate) mod tests {
 
     #[test]
     fn update_added_char_at_display_end() {
-        let buffer = "012345678".to_owned();
+        let editor = LineEditor::from("012345678");
         let mut vb = ViewBuilder::new();
 
         let mut view = vb
             .with_prompt(Some(':'))
             .with_size(DimWH(10, 5))
-            .with_insertion_point(buffer.len())
             .with_cursor_position(Coord2D(9, 4))
             .with_first_display_line(4)
             .with_visible_chars(0..9)
@@ -539,7 +517,7 @@ pub(crate) mod tests {
             .with_state(ViewState::Valid)
             .build();
 
-        let scroll_lines = view.update(&buffer);
+        let scroll_lines = view.update(&editor);
 
         assert_eq!(view, expected_view);
         assert_eq!(scroll_lines, Some(1));
@@ -550,30 +528,32 @@ pub(crate) mod tests {
         let size = DimWH(10, 5);
         let cursor_pos = Coord2D(11, 0);
 
-        let buf = "buffer text".to_owned();
+        let editor = LineEditor::from("buffer text");
 
         let mut view = ViewBuilder::new()
             .with_size(size)
-            .with_insertion_point(buf.len())
             .with_cursor_position(cursor_pos)
             .build();
         let expected_view = view.clone();
 
-        view.resize(size, cursor_pos, &buf);
+        view.resize(size, cursor_pos, &editor);
 
         assert_eq!(view, expected_view);
     }
 
     #[test]
     fn resize_saves_values_and_revalidates() {
-        let buf =
-            "0123456789012345678901234567890123456789012345678".to_owned();
+        let editor = LineEditor::from(
+            "0123456789012345678901234567890123456789012345678",
+        );
 
         let mut vb = ViewBuilder::new();
         let mut view = vb
-            .with_insertion_point(buf.len())
             .with_size(DimWH(80, 24))
-            .with_cursor_position(Coord2D(buf.len().try_into().unwrap(), 23))
+            .with_cursor_position(Coord2D(
+                editor.line.len().try_into().unwrap(),
+                23,
+            ))
             .with_first_display_line(23)
             .build();
 
@@ -581,9 +561,9 @@ pub(crate) mod tests {
             .with_size(DimWH(10, 5))
             .with_first_display_line(0)
             .with_cursor_position(Coord2D(0, 4))
-            .with_visible_chars(9..buf.len())
+            .with_visible_chars(9..editor.line.len())
             .build();
-        view.resize(DimWH(10, 5), Coord2D(0, 4), &buf);
+        view.resize(DimWH(10, 5), Coord2D(0, 4), &editor);
 
         assert!(view.is_valid());
         assert_eq!(view, expected_view);
