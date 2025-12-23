@@ -225,9 +225,7 @@ impl LineEditor {
                 do_history_next_back(buffer, view, history)
             }
             EditCommand::HistoryNext => do_history_next(buffer, view, history),
-            EditCommand::RestoreDraft => {
-                do_restore_draft(buffer, view, history)
-            }
+            EditCommand::Escape => do_escape(buffer, view, history),
             EditCommand::CursorBack => do_cursor_back(buffer, view),
             EditCommand::CursorForward => do_cursor_forward(buffer, view),
             EditCommand::CursorToStart => do_cursor_to_start(view),
@@ -248,6 +246,9 @@ impl LineEditor {
             EditCommand::DeleteSpanBack => do_delete_span_back(buffer, view),
             EditCommand::DeleteSpanForward => {
                 do_delete_span_forward(buffer, view)
+            }
+            EditCommand::UnicodeInputMode => {
+                enter_unicode_input_mode(buffer, view, history)
             }
         }
     }
@@ -278,7 +279,7 @@ fn do_accept_line(
     ControlFlow::Break(())
 }
 
-fn do_restore_draft(
+fn do_escape(
     buffer: &mut String,
     view: &mut View,
     history: Option<&mut HistoryStack>,
@@ -622,6 +623,14 @@ fn do_delete_span_forward(
     ControlFlow::Continue(())
 }
 
+fn enter_unicode_input_mode(
+    _buffer: &mut String,
+    _view: &mut View,
+    _history: Option<&mut HistoryStack>,
+) -> ControlFlow<()> {
+    todo!();
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum EditCommand {
     CharInput(char),
@@ -629,7 +638,7 @@ enum EditCommand {
     Delete,
     HistoryNextBack,
     HistoryNext,
-    RestoreDraft,
+    Escape,
     CursorBack,
     CursorForward,
     CursorToStart,
@@ -645,6 +654,7 @@ enum EditCommand {
     CursorSpanForward,
     DeleteSpanBack,
     DeleteSpanForward,
+    UnicodeInputMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -692,6 +702,10 @@ impl Default for KeyMap {
         bindings.insert(
             (KeyCode::Backspace, KeyModifiers::NONE),
             EditCommand::Backspace,
+        );
+        bindings.insert(
+            (KeyCode::Char('r'), KeyModifiers::CONTROL),
+            EditCommand::UnicodeInputMode,
         );
 
         // Windows style
@@ -741,10 +755,8 @@ impl Default for KeyMap {
             (KeyCode::F(8), KeyModifiers::SHIFT),
             EditCommand::HistoryFind,
         );
-        bindings.insert(
-            (KeyCode::Esc, KeyModifiers::NONE),
-            EditCommand::RestoreDraft,
-        );
+        bindings
+            .insert((KeyCode::Esc, KeyModifiers::NONE), EditCommand::Escape);
         bindings.insert(
             (KeyCode::Left, KeyModifiers::CONTROL),
             EditCommand::CursorSpanBack,
@@ -805,7 +817,7 @@ impl Default for KeyMap {
         );
         bindings.insert(
             (KeyCode::Char('g'), KeyModifiers::CONTROL),
-            EditCommand::RestoreDraft,
+            EditCommand::Escape,
         );
         bindings.insert(
             (KeyCode::Char('b'), KeyModifiers::ALT),
