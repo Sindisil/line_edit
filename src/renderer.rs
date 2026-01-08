@@ -1,7 +1,9 @@
 use std::cmp;
 use std::io;
 use std::io::Write;
+use std::ops::Add;
 use std::ops::Range;
+use std::ops::Sub;
 
 use crossterm::ExecutableCommand;
 use crossterm::QueueableCommand;
@@ -22,6 +24,7 @@ pub struct View {
     cursor_position: Coord2D,
     visible_chars: Range<usize>,
     prompt: Option<char>,
+    unicode_input_position: Option<Coord2D>,
     state: ViewState,
 }
 
@@ -31,7 +34,7 @@ pub enum ViewState {
     Invalid,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Coord2D(pub u16, pub u16);
 
 impl From<(u16, u16)> for Coord2D {
@@ -40,7 +43,23 @@ impl From<(u16, u16)> for Coord2D {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+impl Add<(u16, u16)> for Coord2D {
+    type Output = Coord2D;
+
+    fn add(self, rhs: (u16, u16)) -> Coord2D {
+        Coord2D(self.0 + rhs.0, self.1 + rhs.1)
+    }
+}
+
+impl Sub<(u16, u16)> for Coord2D {
+    type Output = Coord2D;
+
+    fn sub(self, rhs: (u16, u16)) -> Coord2D {
+        Coord2D(self.0 - rhs.0, self.1 + rhs.1)
+    }
+}
+
+#[derive(Debug, Default, Copy, Clone, PartialEq)]
 pub struct DimWH(pub u16, pub u16);
 
 impl From<(u16, u16)> for DimWH {
@@ -70,14 +89,20 @@ impl View {
         first_display_line: u16,
         prompt: Option<char>,
     ) -> View {
+        assert!(size.0 >= 9, "Min 9 col. display width");
         View {
             size,
             first_display_line,
             cursor_position: Coord2D(0, first_display_line),
             visible_chars: 0..0,
             prompt,
+            unicode_input_position: None,
             state: ViewState::Invalid,
         }
+    }
+
+    pub fn size(&self) -> DimWH {
+        self.size
     }
 
     pub fn invalidate(&mut self) {
@@ -98,6 +123,8 @@ impl View {
         if self.size == size && self.cursor_position == cursor_position {
             return;
         }
+
+        assert!(size.0 >= 9, "Min 9 col. display width");
 
         self.size = size;
         self.cursor_position = cursor_position;
@@ -140,12 +167,12 @@ impl View {
 
         let mut scroll_lines = 0;
 
-        let ip_buf_line = buf_lines
+        let line_cursor_buf_line = buf_lines
             .iter()
             .position(|s| s.contains(&editor.line_cursor))
             .expect("line_cursor is in or just after buffer");
 
-        let prompt_width = if ip_buf_line == 0 {
+        let prompt_width = if line_cursor_buf_line == 0 {
             self.prompt.map_or(0, |p| char_width(p, 0))
         } else {
             0
@@ -159,33 +186,35 @@ impl View {
             .position(|l| l.contains(&self.visible_chars.start))
             .expect("visible_chars are in the buffer");
 
-        let new_cursor_x = prompt_width
+        let new_line_cursor_x = prompt_width
             + str_width(
-                &editor.line[buf_lines[ip_buf_line].start..editor.line_cursor],
+                &editor.line
+                    [buf_lines[line_cursor_buf_line].start..editor.line_cursor],
                 prompt_width,
             );
 
-        let new_cursor_y = if first_visible_line + lines_to_bottom < ip_buf_line
-        {
-            // line_cursor below display
-            let delta = ip_buf_line - (first_visible_line + lines_to_bottom);
-            scroll_lines = u16::try_from(cmp::min(
-                usize::from(self.first_display_line),
-                delta,
-            ))
-            .expect("scroll_lines fits u16");
-            self.first_display_line -= scroll_lines;
-            self.size.1 - 1
-        } else if ip_buf_line < first_visible_line {
-            // Only possible if first_display_line was 0
-            first_visible_line = ip_buf_line;
-            0
-        } else {
-            self.first_display_line
-                + u16::try_from(ip_buf_line - first_visible_line)
-                    .expect("new cursor y fits u16")
-        };
-        self.cursor_position = Coord2D(new_cursor_x, new_cursor_y);
+        let new_line_cursor_y =
+            if first_visible_line + lines_to_bottom < line_cursor_buf_line {
+                // line_cursor below display
+                let delta = line_cursor_buf_line
+                    - (first_visible_line + lines_to_bottom);
+                scroll_lines = u16::try_from(cmp::min(
+                    usize::from(self.first_display_line),
+                    delta,
+                ))
+                .expect("scroll_lines fits u16");
+                self.first_display_line -= scroll_lines;
+                self.size.1 - 1
+            } else if line_cursor_buf_line < first_visible_line {
+                // Only possible if first_display_line was 0
+                first_visible_line = line_cursor_buf_line;
+                0
+            } else {
+                self.first_display_line
+                    + u16::try_from(line_cursor_buf_line - first_visible_line)
+                        .expect("new cursor y fits u16")
+            };
+        let new_line_cursor_pos = Coord2D(new_line_cursor_x, new_line_cursor_y);
 
         let last_visible_line = cmp::min(
             buf_lines.len() - 1,
@@ -195,9 +224,28 @@ impl View {
         self.visible_chars.start = buf_lines[first_visible_line].start;
         self.visible_chars.end = buf_lines[last_visible_line].end
             - usize::from(
-                last_visible_line == ip_buf_line
+                last_visible_line == line_cursor_buf_line
                     && editor.line_cursor == editor.line.len(),
             );
+
+        if let Some(unicode_cursor_idx) = editor.unicode_cursor {
+            let new_unicode_pos = cmp::min(
+                new_line_cursor_pos,
+                (
+                    self.size.0 - 3 - str_width(&editor.unicode, 0),
+                    new_line_cursor_pos.1,
+                )
+                    .into(),
+            );
+            self.cursor_position = new_unicode_pos
+                + (2 + str_width(&editor.unicode[..unicode_cursor_idx], 0), 0);
+            self.unicode_input_position = Some(new_unicode_pos);
+        } else {
+            self.cursor_position = new_line_cursor_pos;
+            self.unicode_input_position = None;
+            self.cursor_position =
+                Coord2D(new_line_cursor_x, new_line_cursor_y);
+        }
 
         self.state = ViewState::Valid;
         Some(scroll_lines)
@@ -281,6 +329,7 @@ impl Drop for View {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use similar_asserts::assert_eq;
 
     pub struct ViewBuilder {
         size: DimWH,
@@ -288,6 +337,7 @@ pub(crate) mod tests {
         cursor_position: Coord2D,
         visible_chars: Range<usize>,
         prompt: Option<char>,
+        unicode_input_position: Option<Coord2D>,
         state: ViewState,
     }
 
@@ -299,6 +349,7 @@ pub(crate) mod tests {
                 cursor_position: Coord2D(0, 0),
                 visible_chars: 0..0,
                 prompt: Some(':'),
+                unicode_input_position: None,
                 state: ViewState::Valid,
             }
         }
@@ -309,11 +360,13 @@ pub(crate) mod tests {
             v.cursor_position = self.cursor_position;
             v.visible_chars.start = self.visible_chars.start;
             v.visible_chars.end = self.visible_chars.end;
+            v.unicode_input_position = self.unicode_input_position;
             v.state = self.state;
             v
         }
 
         pub fn with_size(&mut self, size: DimWH) -> &mut Self {
+            assert!(size.0 >= 9, "Min display width is 9 columns");
             self.size = size;
             self
         }
@@ -566,6 +619,67 @@ pub(crate) mod tests {
         view.resize(DimWH(10, 5), Coord2D(0, 4), &editor);
 
         assert!(view.is_valid());
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn update_unicode_field_fits_after_cursor() {
+        let mut editor = LineEditor::from("abcde");
+        let mut vb = ViewBuilder::new();
+        vb.with_size(DimWH(80, 24))
+            .with_cursor_position(Coord2D(
+                editor.line.len().try_into().unwrap(),
+                23,
+            ))
+            .with_first_display_line(23)
+            .with_state(ViewState::Invalid);
+        let mut view = vb.build();
+        let scroll = view.update(&editor);
+        assert_eq!(scroll, Some(0));
+        assert!(view.is_valid());
+
+        let mut expected_view = view.clone();
+        let unicode_pos = expected_view.cursor_position;
+        expected_view.unicode_input_position = Some(unicode_pos);
+        expected_view.cursor_position = unicode_pos + (6, 0);
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        view.invalidate();
+
+        let scroll = view.update(&editor);
+        assert_eq!(scroll, Some(0));
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn update_unicode_field_too_wide_after_cursor() {
+        let mut editor = LineEditor::from("abcde");
+        let mut vb = ViewBuilder::new();
+        vb.with_size(DimWH(10, 5))
+            .with_cursor_position(Coord2D(
+                editor.line.len().try_into().unwrap(),
+                4,
+            ))
+            .with_first_display_line(4)
+            .with_state(ViewState::Invalid);
+        let mut view = vb.build();
+        let scroll = view.update(&editor);
+        assert_eq!(scroll, Some(0));
+        assert!(view.is_valid());
+
+        let mut expected_view = view.clone();
+        let unicode_pos = Coord2D::from((
+            expected_view.size.0 - 7,
+            expected_view.cursor_position.1,
+        ));
+        expected_view.unicode_input_position = Some(unicode_pos);
+        expected_view.cursor_position = unicode_pos + (6, 0);
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        view.invalidate();
+
+        let scroll = view.update(&editor);
+        assert_eq!(scroll, Some(0));
         assert_eq!(view, expected_view);
     }
 }

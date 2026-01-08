@@ -207,6 +207,9 @@ impl LineEditor {
         let prev_bytes = output_buffer.len();
         output_buffer.push_str(&self.line);
         output_buffer.push_str(native_eol());
+        self.line.clear();
+        let new_line_capacity = usize::from(view.size().0).next_multiple_of(64);
+        self.line.shrink_to(new_line_capacity);
         Ok(output_buffer.len() - prev_bytes)
     }
 
@@ -264,7 +267,7 @@ impl LineEditor {
             EditCommand::CursorToEnd => self.do_cursor_to_end(view),
             EditCommand::DeleteToStart => self.do_delete_to_start(view),
             EditCommand::DeleteToEnd => self.do_delete_to_end(view),
-            EditCommand::AcceptLine => self.do_accept_line(),
+            EditCommand::AcceptInput => self.do_accept_input(view),
             EditCommand::HistoryRFind => self.do_history_rfind(view),
             EditCommand::HistoryFind => self.do_history_find(view),
             EditCommand::Indent => self.do_indent(view),
@@ -273,14 +276,22 @@ impl LineEditor {
             EditCommand::CursorSpanForward => self.do_cursor_span_forward(view),
             EditCommand::DeleteSpanBack => self.do_delete_span_back(view),
             EditCommand::DeleteSpanForward => self.do_delete_span_forward(view),
-            EditCommand::UnicodeInputMode => {
-                self.enter_unicode_input_mode(view)
-            }
+            EditCommand::UnicodeInputMode => self.do_unicode_input_mode(view),
         }
     }
 
-    fn do_accept_line(&mut self) -> ControlFlow<()> {
-        if let Some(ref mut history) = self.history
+    fn do_accept_input(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            let cp = u32::from_str_radix(&self.unicode, 16).unwrap();
+            self.unicode.clear();
+            self.unicode_cursor = None;
+            view.invalidate();
+
+            return char::from_u32(cp)
+                .map_or(ControlFlow::Continue(()), |ch| {
+                    self.do_char_input(view, ch)
+                });
+        } else if let Some(ref mut history) = self.history
             && !history.disabled
         {
             history.rewind();
@@ -294,7 +305,11 @@ impl LineEditor {
     }
 
     fn do_escape(&mut self, view: &mut View) -> ControlFlow<()> {
-        if let Some(draft) =
+        if self.unicode_cursor.is_some() {
+            self.unicode_cursor = None;
+            self.unicode.clear();
+            view.invalidate();
+        } else if let Some(draft) =
             self.history.as_mut().and_then(HistoryStack::rewind)
         {
             self.line.replace_range(.., &draft);
@@ -606,11 +621,12 @@ impl LineEditor {
         ControlFlow::Continue(())
     }
 
-    fn enter_unicode_input_mode(
-        &mut self,
-        _view: &mut View,
-    ) -> ControlFlow<()> {
-        todo!();
+    fn do_unicode_input_mode(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_none() {
+            self.unicode_cursor = Some(0);
+            view.invalidate();
+        }
+        ControlFlow::Continue(())
     }
 }
 
@@ -638,7 +654,7 @@ enum EditCommand {
     CursorToEnd,
     DeleteToStart,
     DeleteToEnd,
-    AcceptLine,
+    AcceptInput,
     HistoryRFind,
     HistoryFind,
     Indent,
@@ -691,7 +707,7 @@ impl Default for KeyMap {
         // Common
         bindings.insert(
             (KeyCode::Enter, KeyModifiers::NONE),
-            EditCommand::AcceptLine,
+            EditCommand::AcceptInput,
         );
         bindings
             .insert((KeyCode::Tab, KeyModifiers::NONE), EditCommand::Indent);
@@ -708,7 +724,7 @@ impl Default for KeyMap {
             EditCommand::Backspace,
         );
         bindings.insert(
-            (KeyCode::Char('r'), KeyModifiers::CONTROL),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL),
             EditCommand::UnicodeInputMode,
         );
 
@@ -2376,5 +2392,99 @@ mod tests {
         assert!(res.is_continue());
         assert_eq!(editor, expected_editor);
         assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn do_unicode_input_mode_is_nop_if_repeated() {
+        let mut editor = LineEditor::from("foo");
+        let mut view = ViewBuilder::new().build();
+        let _ = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('u'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+
+        let mut view = ViewBuilder::new().build();
+        editor.unicode = "42".to_owned();
+        editor.unicode_cursor = Some(2);
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('u'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor.unicode_cursor, Some(2));
+        assert!(view.is_valid());
+    }
+
+    #[test]
+    fn do_unicode_input_mode_entry() {
+        let mut editor = LineEditor::from("foo");
+        let mut view = ViewBuilder::new().build();
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('u'),
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor.unicode_cursor, Some(0));
+        assert!(!view.is_valid());
+    }
+
+    #[test]
+    fn do_escape_exits_unicode_input_mode() {
+        let mut editor = LineEditor::from("foo");
+        let mut view = ViewBuilder::new().build();
+
+        let _ = editor.do_unicode_input_mode(&mut view);
+        view = ViewBuilder::new().build();
+        assert!(editor.unicode_cursor.is_some());
+
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert!(editor.unicode.is_empty());
+        assert!(editor.unicode_cursor.is_none());
+        assert!(!view.is_valid());
+    }
+
+    #[test]
+    fn do_accept_input_inserts_unicode_char() {
+        let mut editor = LineEditor::from("ae");
+        let mut view = ViewBuilder::new().build();
+
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(5);
+
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(&editor.line, "aë");
+        assert_eq!(editor.line_cursor, 4);
+        assert!(editor.unicode.is_empty());
+        assert!(editor.unicode_cursor.is_none());
+        assert!(!view.is_valid());
     }
 }
