@@ -10,6 +10,7 @@ use crossterm::QueueableCommand;
 use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
+use crossterm::style::Attribute;
 use crossterm::terminal;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
@@ -131,28 +132,56 @@ impl View {
 
         let buf_lines = self.wrap_lines(editor);
 
-        let ip_buf_line = buf_lines
+        let line_cursor_buf_line = buf_lines
             .iter()
             .position(|l| l.contains(&editor.line_cursor))
             .expect("line_cursor is in or just after buffer");
 
-        let first_visible_buf_line =
-            ip_buf_line.saturating_sub(usize::from(self.cursor_position.1));
+        let first_visible_buf_line = line_cursor_buf_line
+            .saturating_sub(usize::from(self.cursor_position.1));
 
         let last_visible_buf_line = first_visible_buf_line
             + cmp::min(usize::from(self.size.1), buf_lines.len())
             - 1;
 
         self.first_display_line = u16::try_from(
-            usize::from(self.cursor_position.1).saturating_sub(ip_buf_line),
+            usize::from(self.cursor_position.1)
+                .saturating_sub(line_cursor_buf_line),
         )
         .expect("first_display_line fits u16");
         self.visible_chars.start = buf_lines[first_visible_buf_line].start;
         self.visible_chars.end = buf_lines[last_visible_buf_line].end
             - usize::from(
-                last_visible_buf_line == ip_buf_line
+                last_visible_buf_line == line_cursor_buf_line
                     && editor.line_cursor == editor.line.len(),
             );
+
+        if let Some(unicode_cursor) = editor.unicode_cursor {
+            let unicode_cursor_offset =
+                2 + u16::try_from(unicode_cursor).expect("unicode_cursor <= 6");
+            if self.cursor_position.0 >= unicode_cursor_offset {
+                self.unicode_input_position =
+                    Some(self.cursor_position - (unicode_cursor_offset, 0));
+            } else {
+                let prompt_width = if line_cursor_buf_line == 0 {
+                    self.prompt.map_or(0, |p| char_width(p, 0))
+                } else {
+                    0
+                };
+                let cols_before_unicode = str_width(
+                    &editor.line[buf_lines[line_cursor_buf_line].start
+                        ..editor.line_cursor],
+                    0,
+                ) + prompt_width;
+                self.unicode_input_position = Some(Coord2D(
+                    cols_before_unicode,
+                    self.cursor_position.1 - 1,
+                ));
+                self.first_display_line -= 1;
+            }
+        } else {
+            self.unicode_input_position = None;
+        }
         self.state = ViewState::Valid;
     }
 
@@ -178,10 +207,10 @@ impl View {
             0
         };
 
-        let lines_to_bottom =
+        let current_lines_to_bottom =
             usize::from(self.size.1 - 1 - self.first_display_line);
 
-        let mut first_visible_line = buf_lines
+        let mut first_visible_buf_line = buf_lines
             .iter()
             .position(|l| l.contains(&self.visible_chars.start))
             .expect("visible_chars are in the buffer");
@@ -193,59 +222,64 @@ impl View {
                 prompt_width,
             );
 
-        let new_line_cursor_y =
-            if first_visible_line + lines_to_bottom < line_cursor_buf_line {
-                // line_cursor below display
-                let delta = line_cursor_buf_line
-                    - (first_visible_line + lines_to_bottom);
-                scroll_lines = u16::try_from(cmp::min(
-                    usize::from(self.first_display_line),
-                    delta,
-                ))
-                .expect("scroll_lines fits u16");
-                self.first_display_line -= scroll_lines;
-                self.size.1 - 1
-            } else if line_cursor_buf_line < first_visible_line {
-                // Only possible if first_display_line was 0
-                first_visible_line = line_cursor_buf_line;
-                0
-            } else {
-                self.first_display_line
-                    + u16::try_from(line_cursor_buf_line - first_visible_line)
-                        .expect("new cursor y fits u16")
-            };
-        let new_line_cursor_pos = Coord2D(new_line_cursor_x, new_line_cursor_y);
-
-        let last_visible_line = cmp::min(
-            buf_lines.len() - 1,
-            first_visible_line
-                + usize::from(self.size.1 - 1 - self.first_display_line),
-        );
-        self.visible_chars.start = buf_lines[first_visible_line].start;
-        self.visible_chars.end = buf_lines[last_visible_line].end
-            - usize::from(
-                last_visible_line == line_cursor_buf_line
-                    && editor.line_cursor == editor.line.len(),
-            );
+        let new_line_cursor_y = if first_visible_buf_line
+            + current_lines_to_bottom
+            < line_cursor_buf_line
+        {
+            // line_cursor below display
+            let delta = line_cursor_buf_line
+                - (first_visible_buf_line + current_lines_to_bottom);
+            scroll_lines = u16::try_from(cmp::min(
+                usize::from(self.first_display_line),
+                delta,
+            ))
+            .expect("scroll_lines fits u16");
+            self.first_display_line -= scroll_lines;
+            self.size.1 - 1
+        } else if line_cursor_buf_line < first_visible_buf_line {
+            // Only possible if first_display_line was 0
+            first_visible_buf_line = line_cursor_buf_line;
+            0
+        } else {
+            self.first_display_line
+                + u16::try_from(line_cursor_buf_line - first_visible_buf_line)
+                    .expect("new cursor y fits u16")
+        };
+        self.cursor_position = Coord2D(new_line_cursor_x, new_line_cursor_y);
 
         if let Some(unicode_cursor_idx) = editor.unicode_cursor {
-            let new_unicode_pos = cmp::min(
-                new_line_cursor_pos,
-                (
-                    self.size.0 - 3 - str_width(&editor.unicode, 0),
-                    new_line_cursor_pos.1,
-                )
-                    .into(),
-            );
-            self.cursor_position = new_unicode_pos
-                + (2 + str_width(&editor.unicode[..unicode_cursor_idx], 0), 0);
-            self.unicode_input_position = Some(new_unicode_pos);
+            // Unicode input mode active
+            let mut unicode_input_position = self.cursor_position;
+            self.cursor_position.0 += 2 + u16::try_from(unicode_cursor_idx)
+                .expect("unicode_cursor <= 6");
+            if self.cursor_position.0 >= self.size.0 {
+                // Unicode wrapped to next line
+                self.cursor_position.0 -= self.size.0;
+                if self.cursor_position.1 == self.size.1 - 1 {
+                    // Cursor now below display
+                    if self.first_display_line > 0 {
+                        self.first_display_line -= 1;
+                        scroll_lines += 1;
+                    }
+                    unicode_input_position.1 -= 1;
+                } else {
+                    self.cursor_position.1 += 1;
+                }
+            }
+            self.unicode_input_position = Some(unicode_input_position);
         } else {
-            self.cursor_position = new_line_cursor_pos;
+            // Unicode input mode not active
             self.unicode_input_position = None;
-            self.cursor_position =
-                Coord2D(new_line_cursor_x, new_line_cursor_y);
         }
+
+        let last_visible_buf_line = cmp::min(
+            buf_lines.len() - 1,
+            first_visible_buf_line
+                + usize::from(self.size.1 - 1 - self.first_display_line),
+        );
+        self.visible_chars.start = buf_lines[first_visible_buf_line].start;
+        self.visible_chars.end =
+            cmp::min(buf_lines[last_visible_buf_line].end, editor.line.len());
 
         self.state = ViewState::Valid;
         Some(scroll_lines)
@@ -277,6 +311,16 @@ impl View {
             &editor.line[self.visible_chars.clone()],
         )?;
 
+        if let Some(unicode_position) = self.unicode_input_position {
+            // Render Unicode input field
+            stdout.queue(MoveTo(unicode_position.0, unicode_position.1))?;
+            print!(
+                "{}\\u{} {}",
+                Attribute::Reverse,
+                editor.unicode,
+                Attribute::NoReverse
+            );
+        }
         stdout
             .queue(MoveTo(self.cursor_position.0, self.cursor_position.1))?
             .queue(Show)?
@@ -388,6 +432,14 @@ pub(crate) mod tests {
 
         pub fn with_prompt(&mut self, p: Option<char>) -> &mut Self {
             self.prompt = p;
+            self
+        }
+
+        pub fn with_unicode_input_position(
+            &mut self,
+            uip: Option<Coord2D>,
+        ) -> &mut Self {
+            self.unicode_input_position = uip;
             self
         }
 
@@ -627,23 +679,19 @@ pub(crate) mod tests {
         let mut editor = LineEditor::from("abcde");
         let mut vb = ViewBuilder::new();
         vb.with_size(DimWH(80, 24))
-            .with_cursor_position(Coord2D(
-                editor.line.len().try_into().unwrap(),
-                23,
-            ))
-            .with_first_display_line(23)
-            .with_state(ViewState::Invalid);
+            .with_cursor_position(Coord2D(6, 23))
+            .with_visible_chars(0..5)
+            .with_first_display_line(23);
         let mut view = vb.build();
-        let scroll = view.update(&editor);
-        assert_eq!(scroll, Some(0));
-        assert!(view.is_valid());
 
         let mut expected_view = view.clone();
         let unicode_pos = expected_view.cursor_position;
         expected_view.unicode_input_position = Some(unicode_pos);
-        expected_view.cursor_position = unicode_pos + (6, 0);
+        expected_view.cursor_position = Coord2D(12, 23);
+
         editor.unicode = "0308".to_owned();
         editor.unicode_cursor = Some(4);
+        view.unicode_input_position = Some(unicode_pos);
         view.invalidate();
 
         let scroll = view.update(&editor);
@@ -654,32 +702,53 @@ pub(crate) mod tests {
     #[test]
     fn update_unicode_field_too_wide_after_cursor() {
         let mut editor = LineEditor::from("abcde");
-        let mut vb = ViewBuilder::new();
-        vb.with_size(DimWH(10, 5))
-            .with_cursor_position(Coord2D(
-                editor.line.len().try_into().unwrap(),
-                4,
-            ))
-            .with_first_display_line(4)
-            .with_state(ViewState::Invalid);
-        let mut view = vb.build();
-        let scroll = view.update(&editor);
-        assert_eq!(scroll, Some(0));
-        assert!(view.is_valid());
-
-        let mut expected_view = view.clone();
-        let unicode_pos = Coord2D::from((
-            expected_view.size.0 - 7,
-            expected_view.cursor_position.1,
-        ));
-        expected_view.unicode_input_position = Some(unicode_pos);
-        expected_view.cursor_position = unicode_pos + (6, 0);
         editor.unicode = "0308".to_owned();
         editor.unicode_cursor = Some(4);
+
+        let mut vb = ViewBuilder::new();
+        vb.with_size(DimWH(10, 5));
+        let mut view = vb
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .with_visible_chars(0..5)
+            .build();
+
+        let expected_view = vb
+            .with_unicode_input_position(Some(Coord2D(6, 3)))
+            .with_cursor_position(Coord2D(2, 4))
+            .with_first_display_line(3)
+            .build();
         view.invalidate();
 
         let scroll = view.update(&editor);
-        assert_eq!(scroll, Some(0));
+        assert_eq!(scroll, Some(1));
+        assert_eq!(view, expected_view);
+    }
+    #[test]
+    fn resize_handles_unicode_input() {
+        // Set up view with active unicode input field
+        // such that resize will cause both cursor and
+        // unicode_input_position to change.
+        let mut editor = LineEditor::from("012345678abcde");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+
+        let mut vb = ViewBuilder::new();
+        vb.with_size(DimWH(15, 5)).with_visible_chars(0..14);
+        let mut view = vb
+            .with_unicode_input_position(Some(Coord2D(0, 4)))
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(3)
+            .build();
+
+        let expected_view = vb
+            .with_size(DimWH(10, 5))
+            .with_unicode_input_position(Some(Coord2D(5, 3)))
+            .with_cursor_position(Coord2D(1, 4))
+            .with_first_display_line(2)
+            .build();
+
+        view.resize(DimWH(10, 5), Coord2D(1, 4), &editor);
         assert_eq!(view, expected_view);
     }
 }
