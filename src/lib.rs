@@ -320,6 +320,11 @@ impl LineEditor {
     }
 
     fn do_history_next(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No history during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if let Some(history_line) =
             self.history.as_mut().and_then(|h| h.next_newer())
         {
@@ -332,6 +337,11 @@ impl LineEditor {
     }
 
     fn do_history_next_back(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No history during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if let Some(line) =
             self.history.as_mut().and_then(|h| h.next_older(&self.line))
         {
@@ -344,34 +354,49 @@ impl LineEditor {
     }
 
     fn do_char_input(&mut self, view: &mut View, c: char) -> ControlFlow<()> {
-        // if char is zero width, but no previous chars exist to
-        //  which it can  be combined, do nothing (i.e., don't accept
-        // the input)
-        if c != '\t'
-            && c.width().unwrap_or(0) == 0
-            && !self.line[..self.line_cursor]
-                .chars()
-                .rev()
-                .take_while(|c| *c != '\t')
-                .any(|c| c.width().unwrap_or(0) > 0)
-        {
-            return ControlFlow::Continue(());
-        }
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                if !c.is_ascii_hexdigit() || *unicode_cursor == 6 {
+                    return ControlFlow::Continue(());
+                }
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                // if char is zero width, but no previous chars exist to
+                //  which it can  be combined, do nothing (i.e., don't accept
+                // the input)
+                if c != '\t'
+                    && c.width().unwrap_or(0) == 0
+                    && !self.line[..self.line_cursor]
+                        .chars()
+                        .rev()
+                        .take_while(|c| *c != '\t')
+                        .any(|c| c.width().unwrap_or(0) > 0)
+                {
+                    return ControlFlow::Continue(());
+                }
+                (&mut self.line_cursor, &mut self.line)
+            };
 
-        self.line.insert(self.line_cursor, c);
-        self.line_cursor += c.len_utf8();
+        text.insert(*cursor, c);
+        *cursor += c.len_utf8();
         view.invalidate();
 
         ControlFlow::Continue(())
     }
 
     fn do_backspace(&mut self, view: &mut View) -> ControlFlow<()> {
-        if self.line_cursor != 0
-            && let Some((i, _)) =
-                self.line[..self.line_cursor].char_indices().next_back()
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
+        if *cursor != 0
+            && let Some((i, _)) = text[..*cursor].char_indices().next_back()
         {
-            self.line.remove(i);
-            self.line_cursor = i;
+            text.remove(i);
+            *cursor = i;
             view.invalidate();
         }
 
@@ -379,12 +404,19 @@ impl LineEditor {
     }
 
     fn do_cursor_back(&mut self, view: &mut View) -> ControlFlow<()> {
-        if self.line_cursor != 0
-            && let Some((prev_idx, _)) = self.line[..self.line_cursor]
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
+        if *cursor != 0
+            && let Some((prev_idx, _)) = text[..*cursor]
                 .char_indices()
                 .rfind(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
         {
-            self.line_cursor = prev_idx;
+            *cursor = prev_idx;
             view.invalidate();
         }
 
@@ -392,14 +424,21 @@ impl LineEditor {
     }
 
     fn do_cursor_forward(&mut self, view: &mut View) -> ControlFlow<()> {
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
         // If aleady at end, nothing to do
-        if self.line_cursor != self.line.len() {
-            let next_idx = self.line[self.line_cursor..]
+        if *cursor != text.len() {
+            let next_idx = text[*cursor..]
                 .char_indices()
                 .skip(1)
                 .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
-                .map_or_else(|| self.line.len(), |(i, _)| i + self.line_cursor);
-            self.line_cursor = next_idx;
+                .map_or_else(|| text.len(), |(i, _)| i + *cursor);
+            *cursor = next_idx;
             view.invalidate();
         }
 
@@ -407,15 +446,22 @@ impl LineEditor {
     }
 
     fn do_delete(&mut self, view: &mut View) -> ControlFlow<()> {
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
         // if at end of buffer, nothing to do
-        let cur_idx = self.line_cursor;
-        if cur_idx != self.line.len() {
-            let next_idx = self.line[self.line_cursor..]
+        let cur_idx = *cursor;
+        if cur_idx != text.len() {
+            let next_idx = text[*cursor..]
                 .char_indices()
                 .skip(1)
                 .find(|(_, c)| *c == '\t' || c.width().unwrap_or(0) > 0)
-                .map_or_else(|| self.line.len(), |(i, _)| i + self.line_cursor);
-            self.line.replace_range(self.line_cursor..next_idx, "");
+                .map_or_else(|| text.len(), |(i, _)| i + *cursor);
+            text.replace_range(*cursor..next_idx, "");
             view.invalidate();
         }
 
@@ -423,10 +469,17 @@ impl LineEditor {
     }
 
     fn do_delete_to_start(&mut self, view: &mut View) -> ControlFlow<()> {
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
         // if at start of buffer, nothing to do
-        if self.line_cursor != 0 {
-            self.line.replace_range(..self.line_cursor, "");
-            self.line_cursor = 0;
+        if *cursor != 0 {
+            text.replace_range(..*cursor, "");
+            *cursor = 0;
             view.invalidate();
         }
 
@@ -434,10 +487,17 @@ impl LineEditor {
     }
 
     fn do_delete_to_end(&mut self, view: &mut View) -> ControlFlow<()> {
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
         // if at end of buffer, nothing to do
-        if self.line_cursor != self.line.len() {
-            self.line.replace_range(self.line_cursor.., "");
-            self.line_cursor = self.line.len();
+        if *cursor != text.len() {
+            text.replace_range(*cursor.., "");
+            *cursor = text.len();
             view.invalidate();
         }
 
@@ -445,8 +505,11 @@ impl LineEditor {
     }
 
     fn do_cursor_to_start(&mut self, view: &mut View) -> ControlFlow<()> {
-        if self.line_cursor != 0 {
-            self.line_cursor = 0;
+        let cursor =
+            self.unicode_cursor.as_mut().unwrap_or(&mut self.line_cursor);
+
+        if *cursor != 0 {
+            *cursor = 0;
             view.invalidate();
         }
 
@@ -454,8 +517,15 @@ impl LineEditor {
     }
 
     fn do_cursor_to_end(&mut self, view: &mut View) -> ControlFlow<()> {
-        if self.line_cursor != self.line.len() {
-            self.line_cursor = self.line.len();
+        let (cursor, text) =
+            if let Some(unicode_cursor) = self.unicode_cursor.as_mut() {
+                (unicode_cursor, &mut self.unicode)
+            } else {
+                (&mut self.line_cursor, &mut self.line)
+            };
+
+        if *cursor != text.len() {
+            *cursor = text.len();
             view.invalidate();
         }
 
@@ -463,6 +533,11 @@ impl LineEditor {
     }
 
     fn do_history_find(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No history during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if let Some(line) = self
             .history
             .as_mut()
@@ -476,6 +551,11 @@ impl LineEditor {
     }
 
     fn do_history_rfind(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No history during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if let Some(line) = self
             .history
             .as_mut()
@@ -489,6 +569,11 @@ impl LineEditor {
     }
 
     fn do_indent(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No indent during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         // If the first buffer char is tab ('\t'), insert one additional
         // tab at start of line. If not, insert up to 4 space (' ') chars
         // at start of line, so that leading spaces are the next multiple
@@ -509,6 +594,11 @@ impl LineEditor {
     }
 
     fn do_dedent(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // No dedent during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         // If the first buffer char is tab ('\t'), delete it.
         // If not, delete up to 4 leading spaces so that the
         // number of remaining leading spaces is a multple of four.
@@ -529,6 +619,11 @@ impl LineEditor {
     }
 
     fn do_cursor_span_back(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // Span based commands are NOP during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if self.line_cursor == 0 {
             return ControlFlow::Continue(());
         }
@@ -554,6 +649,11 @@ impl LineEditor {
     }
 
     fn do_cursor_span_forward(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // Span based commands are NOP during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         let mut gr_idxs = self
             .line
             .grapheme_indices(true)
@@ -576,6 +676,11 @@ impl LineEditor {
     }
 
     fn do_delete_span_back(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // Span based commands are NOP during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         if self.line_cursor == 0 {
             return ControlFlow::Continue(());
         }
@@ -599,6 +704,11 @@ impl LineEditor {
     }
 
     fn do_delete_span_forward(&mut self, view: &mut View) -> ControlFlow<()> {
+        if self.unicode_cursor.is_some() {
+            // Span based commands are NOP during Unicode input
+            return ControlFlow::Continue(());
+        }
+
         let mut gr_idxs = self
             .line
             .grapheme_indices(true)
@@ -2411,6 +2521,7 @@ mod tests {
         let mut view = ViewBuilder::new().build();
         editor.unicode = "42".to_owned();
         editor.unicode_cursor = Some(2);
+        assert!(view.is_valid());
         let res = editor
             .handle_event(
                 &mut view,
@@ -2429,6 +2540,7 @@ mod tests {
     fn do_unicode_input_mode_entry() {
         let mut editor = LineEditor::from("foo");
         let mut view = ViewBuilder::new().build();
+        assert!(view.is_valid());
         let res = editor
             .handle_event(
                 &mut view,
@@ -2452,6 +2564,7 @@ mod tests {
         view = ViewBuilder::new().build();
         assert!(editor.unicode_cursor.is_some());
 
+        assert!(view.is_valid());
         let res = editor
             .handle_event(
                 &mut view,
@@ -2471,8 +2584,9 @@ mod tests {
         let mut view = ViewBuilder::new().build();
 
         editor.unicode = "0308".to_owned();
-        editor.unicode_cursor = Some(5);
+        editor.unicode_cursor = Some(4);
 
+        assert!(view.is_valid());
         let res = editor
             .handle_event(
                 &mut view,
@@ -2486,5 +2600,408 @@ mod tests {
         assert!(editor.unicode.is_empty());
         assert!(editor.unicode_cursor.is_none());
         assert!(!view.is_valid());
+    }
+
+    #[test]
+    fn history_cmds_nop_in_unicode_input() {
+        let mut editor = LineEditor::from("foo");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+
+        let hs = HistoryStackBuilder::new()
+            .with_entries(&["foo", "bar", "baz"])
+            .build();
+        editor.history = Some(hs);
+
+        let mut view = ViewBuilder::new().build();
+
+        let expected_editor = editor.clone();
+        let expected_view = view.clone();
+
+        // NextBack
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+
+        // Rfind
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+
+        // Find
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+
+        // Next
+        let hs = HistoryStackBuilder::new()
+            .with_entries(&["foo", "bar", "baz"])
+            .with_draft(Some("frotz"))
+            .with_index(Some(1))
+            .build();
+        editor.history = Some(hs);
+        let expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
+            )
+            .unwrap();
+
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn word_based_cmds_nop_in_unicode_input() {
+        let mut editor = LineEditor::from("line input");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        let mut view = ViewBuilder::new().build();
+        let expected_view = view.clone();
+        assert!(view.is_valid());
+
+        // Next Word
+        editor.line_cursor = 0;
+        let expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+
+        // Prev Word
+        editor.line_cursor = editor.line.len();
+        let expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+
+        // Delete Next Word
+        editor.line_cursor = 0;
+        let expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Delete,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+
+        // Delete Prev Word
+        editor.line_cursor = editor.line.len();
+        let expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert_eq!(editor, expected_editor);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn navigate_begin_end_during_unicode_input() {
+        let mut editor = LineEditor::from("line input");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        let mut view = ViewBuilder::new().build();
+
+        // Cursor to Start
+        let mut expected_editor = editor.clone();
+        expected_editor.unicode_cursor = Some(0);
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // Cursor to End
+        expected_editor.unicode_cursor = Some(4);
+        view = ViewBuilder::new().build();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn delete_begin_end_during_unicode_input() {
+        let mut editor = LineEditor::from("line input");
+        let mut view = ViewBuilder::new().build();
+
+        // Delete to start
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(2);
+        let mut expected_editor = editor.clone();
+        expected_editor.unicode = "08".to_owned();
+        expected_editor.unicode_cursor = Some(0);
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Home,
+                    KeyModifiers::CONTROL,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // Delete to end
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(2);
+        let mut expected_editor = editor.clone();
+        expected_editor.unicode = "03".to_owned();
+        view = ViewBuilder::new().build();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn navigate_next_and_back_during_unicode_input() {
+        let mut editor = LineEditor::from("line input");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        let mut view = ViewBuilder::new().build();
+
+        // Back
+        assert!(view.is_valid());
+        let mut expected_editor = editor.clone();
+        expected_editor.unicode_cursor = Some(3);
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // Next
+        expected_editor.unicode_cursor = Some(1);
+        editor.unicode_cursor = Some(0);
+        view = ViewBuilder::new().build();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn delete_char_next_and_back_during_unicode_input() {
+        let mut editor = LineEditor::from("line input");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        let mut view = ViewBuilder::new().build();
+
+        // Backspace
+        let mut expected_editor = editor.clone();
+        expected_editor.unicode = "030".to_owned();
+        expected_editor.unicode_cursor = Some(3);
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // Delete
+        editor.unicode_cursor = Some(0);
+        expected_editor = editor.clone();
+        expected_editor.unicode = "30".to_owned();
+        view = ViewBuilder::new().build();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(!view.is_valid());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn indent_dedent_nop_during_unicode_input() {
+        let mut editor = LineEditor::from("    line input");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+        let mut view = ViewBuilder::new().build();
+        let expected_editor = editor.clone();
+
+        // Indent
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // Dedent
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn unicode_input_limited_to_six_hex_digits() {
+        let mut editor = LineEditor::from("ae");
+        editor.unicode.clear();
+        editor.unicode_cursor = Some(0);
+        let mut view = ViewBuilder::new().build();
+
+        // non-hex digit chars ignored
+        let mut expected_editor = editor.clone();
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('z'),
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(editor, expected_editor);
+
+        // up to six hex digits accepted
+        for ch in "01F3b8".chars() {
+            expected_editor.unicode.push(ch);
+            *expected_editor.unicode_cursor.get_or_insert(0) += 1;
+            view = ViewBuilder::new().build();
+            let res = editor
+                .handle_event(
+                    &mut view,
+                    &Event::Key(KeyEvent::new(
+                        KeyCode::Char(ch),
+                        KeyModifiers::NONE,
+                    )),
+                )
+                .unwrap();
+            assert!(res.is_continue());
+            assert!(!view.is_valid());
+            assert_eq!(editor, expected_editor);
+        }
+
+        // hex digits beyond 6 ignored
+        view = ViewBuilder::new().build();
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(
+                    KeyCode::Char('a'),
+                    KeyModifiers::NONE,
+                )),
+            )
+            .unwrap();
+        assert!(res.is_continue());
+        assert!(view.is_valid());
+        assert_eq!(editor, expected_editor);
     }
 }
