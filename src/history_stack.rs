@@ -1,5 +1,6 @@
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HistoryStack {
+    pub disabled: bool,
     entries: Vec<String>,
     draft: Option<String>,
     index: usize,
@@ -36,12 +37,20 @@ impl HistoryStack {
     /// Return reference to last (top) stack entry,
     /// or None if stack is empty.
     pub fn last(&self) -> Option<&str> {
+        if self.disabled {
+            return None;
+        }
+
         self.entries.last().map(String::as_str)
     }
 
     /// Return next newest history line. If at top of stack, return draft,
     /// if there is one, or None if not.
     pub fn next_newer(&mut self) -> Option<&str> {
+        if self.disabled {
+            return None;
+        }
+
         if self.index == self.entries.len() {
             // Already at top of stack, so can clean
             // up draft.
@@ -60,6 +69,10 @@ impl HistoryStack {
 
     /// Return next oldest history line, or None if at bottom of stack.
     pub fn next_older(&mut self, input_line: &str) -> Option<&str> {
+        if self.disabled {
+            return None;
+        }
+
         if self.index == 0 {
             // Nothing to do if already at bottom of stack.
             return None;
@@ -86,6 +99,10 @@ impl HistoryStack {
     /// Likewise, pushing to or rewinding the stack also
     /// results in restarting the search from top of stack.
     pub fn rfind(&mut self, prefix: &str) -> Option<&str> {
+        if self.disabled {
+            return None;
+        }
+
         let cursor = self.search_cursor.get_or_insert(
             (prefix, self.entries.len(), SearchOrder::Older).into(),
         );
@@ -122,6 +139,10 @@ impl HistoryStack {
     /// Likewise, pushing to or rewinding the stack also
     /// results in restarting the search from top of stack.
     pub fn find(&mut self, prefix: &str) -> Option<&str> {
+        if self.disabled {
+            return None;
+        }
+
         let cursor = self
             .search_cursor
             .get_or_insert((prefix, 0, SearchOrder::Newer).into());
@@ -150,6 +171,10 @@ impl HistoryStack {
     /// Rewind stack to top, discarding draft text and any
     /// edited history. Returns draft text if it was set, or None if not.
     pub fn rewind(&mut self) -> Option<String> {
+        if self.disabled {
+            return None;
+        }
+
         self.index = self.entries.len();
         self.search_cursor = None;
         self.draft.take()
@@ -169,6 +194,7 @@ pub(crate) mod tests {
 
     #[derive(Debug, Default)]
     pub(crate) struct HistoryStackBuilder {
+        disabled: Option<bool>,
         entries: Option<Vec<String>>,
         index: Option<usize>,
         draft: Option<String>,
@@ -181,11 +207,17 @@ pub(crate) mod tests {
         }
 
         pub fn build(&self) -> HistoryStack {
+            let disabled = self.disabled.unwrap_or_default();
             let entries = self.entries.clone().unwrap_or_default();
             let index = self.index.unwrap_or(entries.len());
             let draft = self.draft.clone();
             let search_cursor = self.search_cursor.clone();
-            HistoryStack { entries, draft, index, search_cursor }
+            HistoryStack { disabled, entries, draft, index, search_cursor }
+        }
+
+        pub fn with_disabled(&mut self, disabled: bool) -> &mut Self {
+            self.disabled = Some(disabled);
+            self
         }
 
         pub fn with_entries(&mut self, entries: &[&str]) -> &mut Self {
@@ -246,6 +278,17 @@ pub(crate) mod tests {
         let hs = hsb.with_entries(&["oldest", "older", "old"]).build();
         let line = hs.last();
         assert_eq!(line, Some("old"));
+    }
+
+    #[test]
+    fn last_returns_none_when_disabled() {
+        let mut hsb = HistoryStackBuilder::new();
+        let hs = hsb
+            .with_entries(&["oldest", "older", "old"])
+            .with_disabled(true)
+            .build();
+        let line = hs.last();
+        assert!(line.is_none());
     }
 
     #[test]
