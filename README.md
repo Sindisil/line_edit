@@ -18,41 +18,52 @@ for editing the input line.
 | Ctrl + Left  or Alt + b  | Cursor back word    |
 | Ctrl + Right or Alt + f  | Cursor forward word |
 
-## Deletion
-| Key Binding                      | Action                             |
-|----------------------------------|------------------------------------|
-| Backspace                        | Delete char before cursor          |
-| Ctrl + Home                      | Delete before cursor               |
-| Delete           or Ctrl + d     | Delete to next non zero width char |
-| Ctrl + End       or Ctrl + k     | Delete from cursor to end          |
-| Ctrl + Backspace or Alt + Delete | Delete to previous word start      |
-| Ctrl + Delete    or Alt + d      | Delete to next word start          |
+## Editing
+| Key Binding                      | Action                              |
+|----------------------------------|-------------------------------------|
+| Backspace                        | Delete char before cursor           |
+| Ctrl + Home                      | Delete before cursor to start       |
+| Delete           or Ctrl + d     | Delete to next non zero width char  |
+| Ctrl + End       or Ctrl + k     | Delete from cursor to end           |
+| Ctrl + Backspace or Alt + Delete | Delete to previous word start       |
+| Ctrl + Delete    or Alt + d      | Delete to next word start           |
+| Ctrl + i                         | Insert one tab ('\t') at cursor     |
+| Ctrl + u                         | Insert Unicode code point at cursor |
+| Tab                              | Indent line one tab stop            |
+| Shift + Tab                      | Dedent line one tab stop            |
 
-## Indentation & Tabs
-| Key Binding      | Action                                    |
-|------------------|-------------------------------------------|
-| Tab              | Indent line one tab stop                  |
-| Shift + Tab      | Dedent line one tab stop                  |
-| Ctrl + i         | Insert one tab character ('\t') at cursor |
+### Unicode input
+The Unicode input feature accepts a Unicode code point as up to six
+hexidecimal digits. Pressing Enter inserts the character specified by the
+code point a the cursor position. If the code point is invalid, or input
+is canceled with Exc or Ctrl + g, no character is inserted and line_edit
+returns to normal editing. Most edit commands are usable during Unicode
+input, with the exception of history commands, word oriented commands, and
+indent/dedent. As mentioned, Unicode input may be canceled with Esc or
+Ctrl + g.
 
-Indent means insert enough spaces to move the first printable
-character of the relevant region to the next tab stop. Dedent
-means delete enough spaces to move the first printable character
-to the previous tab stop.
+### Indent/Dedent
+Indent means insert enough spaces to move the first printable character on
+the line to the next tab stop. Dedent means delete enough spaces to move
+the first printable character to the previous tab stop.
 
-When indenting or dedenting the whole line, if the line begins
-with a tab ('\t') character, a single tab will be inserted or
-deleted from the start of line, rather than some number of spaces.
+When indenting or dedenting, if the line begins with a tab ('\t'), a single
+tab will be inserted or deleted from the start of line, rather than some
+number of spaces.
 
 Tab stops are currently defined as 4 spaces.
 
 ## History
-| Key Binding            | Action                                  |
-|------------------------|-----------------------------------------|
-| Up         or Ctrl + p | Display next older history              |
-| Down       or Ctrl + n | Display next newer history              | 
-| Esc        or Ctrl + g | Display draft input                     |
-| F8         or Ctrl + r | Find next older history matching buffer |
-| Shift + F8 or Ctrl + p | Find next newer history matching buffer |
+| Key Binding                  | Action                                  |
+|------------------------------|-----------------------------------------|
+| Up         or Ctrl + p       | Display next older history              |
+| Down       or Ctrl + n       | Display next newer history              | 
+| Esc        or Ctrl + g       | Cancel history editing, restoring draft |
+| F8         or Ctrl + r       | Find next older history matching buffer |
+| Shift + F8 or Ctrl + p       | Find next newer history matching buffer |
 
-Note: line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned). References to issue numbers previous to Oct. 1, 2025 refer to issues within that project. I've chosen not to move the closed issues here because they this library (then called line_read) was most often changed in lockstep with lned.
+Note: line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
+References to issue numbers previous to Oct. 1, 2025 refer to issues
+within that project. I've chosen not to move the closed issues here
+because at the time this library (then called line_read) was most often
+changed in lockstep with lned.
