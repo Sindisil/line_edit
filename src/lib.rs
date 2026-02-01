@@ -22,7 +22,7 @@ mod history_stack;
 mod renderer;
 
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::io::{self, Write, BufRead};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -750,6 +750,20 @@ impl LineEdit for LineEditor {
     }
 }
 
+impl<T> LineEdit for T
+where
+    T: BufRead,
+{
+    fn read_line(
+        &mut self,
+        buffer: &mut String,
+        _options: Option<&EditorOptions>,
+    ) -> io::Result<usize> {
+        BufRead::read_line(self, buffer)
+    }
+}
+
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum EditCommand {
     CharInput(char),
@@ -981,6 +995,17 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use similar_asserts::assert_eq;
 
+    #[test]
+    fn can_read_line_from_bufread() {
+        fn read(editor: &mut impl LineEdit, buf: &mut String) {
+            editor.read_line(buf, None).unwrap();
+        }
+        
+        let mut input = "foo\n".as_bytes();
+        let mut buf = String::new();
+        read(&mut input, &mut buf);
+        assert_eq!(&buf, "foo\n");
+    }
     #[test]
     fn unimplemented_event_ignored() {
         let mut editor = LineEditor::new();
