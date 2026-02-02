@@ -6,14 +6,21 @@ use line_edit::LineEditor;
 fn main() {
     let mut line = String::new();
     let mut reader = LineEditor::new();
-    let res = reader.read_line(
-        &mut line,
-        Some(&EditorOptions { prompt: Some(':'), ..Default::default() }),
-    );
-    match res {
-        Err(e) => eprintln!("{e}"),
-        Ok(bytes_read) => {
-            eprintln!("read {bytes_read} bytes\n{line}");
+    loop {
+        let res = reader.read_line(
+            &mut line,
+            Some(&EditorOptions { prompt: Some(':'), ..Default::default() }),
+        );
+        match res {
+            Err(e) => println!("{e}"),
+            Ok(bytes_read) => {
+                println!("read {bytes_read} bytes\n{line:?}");
+                if line.trim() == "q" {
+                println!("exiting");
+                    break;
+                }
+            }
         }
+        line.clear();
     }
 }
