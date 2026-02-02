@@ -22,7 +22,7 @@ mod history_stack;
 mod renderer;
 
 use std::collections::HashMap;
-use std::io::{self, Write, BufRead};
+use std::io::{self, BufRead, Write};
 use std::ops::ControlFlow;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -208,6 +208,7 @@ impl LineEditor {
         output_buffer.push_str(&self.line);
         output_buffer.push_str(native_eol());
         self.line.clear();
+        self.line_cursor = 0;
         let new_line_capacity = usize::from(view.size().0).next_multiple_of(64);
         self.line.shrink_to(new_line_capacity);
         Ok(output_buffer.len() - prev_bytes)
@@ -763,7 +764,6 @@ where
     }
 }
 
-
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum EditCommand {
     CharInput(char),
@@ -1000,7 +1000,7 @@ mod tests {
         fn read(editor: &mut impl LineEdit, buf: &mut String) {
             editor.read_line(buf, None).unwrap();
         }
-        
+
         let mut input = "foo\n".as_bytes();
         let mut buf = String::new();
         read(&mut input, &mut buf);
