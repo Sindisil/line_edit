@@ -62,8 +62,15 @@ Tab stops are currently defined as 4 spaces.
 | F8         or Ctrl + r       | Find next older history matching buffer |
 | Shift + F8 or Ctrl + p       | Find next newer history matching buffer |
 
-Note: line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
+
+# Contributing:
+My policy may change in the future, but line_input is not open for pull requests, but I'm open to issues for bug reports and/or requests (keeping in mind that it is intended to be *simple* and primarily to fit my particular needs.
+
+**Note:**
+> line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
 References to issue numbers previous to Oct. 1, 2025 refer to issues
 within that project. I've chosen not to move the closed issues here
 because at the time this library (then called line_read) was most often
 changed in lockstep with lned.
+
+
