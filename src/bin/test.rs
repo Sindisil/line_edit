@@ -16,7 +16,7 @@ fn main() {
             Ok(bytes_read) => {
                 println!("read {bytes_read} bytes\n{line:?}");
                 if line.trim() == "q" {
-                println!("exiting");
+                    println!("exiting");
                     break;
                 }
             }
