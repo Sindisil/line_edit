@@ -760,7 +760,12 @@ where
         buffer: &mut String,
         _options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
-        BufRead::read_line(self, buffer)
+        let mut bytes = BufRead::read_line(self, buffer)?;
+        if !(buffer.ends_with("\n") || buffer.ends_with("\r\n")) {
+            buffer.push_str(native_eol());
+            bytes += native_eol().len();
+        }
+        Ok(bytes)
     }
 }
 
@@ -1006,6 +1011,19 @@ mod tests {
         read(&mut input, &mut buf);
         assert_eq!(&buf, "foo\n");
     }
+
+    #[test]
+    fn read_line_from_bufread_ensures_newline() {
+        fn read(editor: &mut impl LineEdit, buf: &mut String) {
+            editor.read_line(buf, None).unwrap();
+        }
+
+        let mut input = "".as_bytes();
+        let mut buf = String::new();
+        read(&mut input, &mut buf);
+        assert_eq!(&buf, native_eol());
+    }
+
     #[test]
     fn unimplemented_event_ignored() {
         let mut editor = LineEditor::new();
