@@ -64,7 +64,16 @@ Tab stops are currently defined as 4 spaces.
 
 
 # Contributing:
-My policy may change in the future, but line_input is not open for pull requests, but I'm open to issues for bug reports and/or requests (keeping in mind that it is intended to be *simple* and primarily to fit my particular needs.
+My policy may change in the future, but line_input is not open for pull
+requests, but I'm open to issues for bug reports and/or requests
+(keeping in mind that it is intended to be *simple* and primarily to fit
+my particular needs.
+
+# Generative AI Policy
+
+Issues generated with AI agents will be rejected out of hand.
+If line_edit eventually opens up to external pull requests, any pull requests
+generated with AI agents will also be rejected.
 
 **Note:**
 > line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
