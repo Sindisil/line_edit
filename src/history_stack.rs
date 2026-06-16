@@ -299,6 +299,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn rfind_returns_none_when_disabled() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        assert_eq!(hs.rfind("old"), Some("old"));
+        hs.disabled = true;
+        assert!(hs.rfind("old").is_none());
+        hs.disabled = false;
+        assert_eq!(hs.rfind("old"), Some("older"));
+    }
+
+    #[test]
     fn rfind_returns_first_match_from_top() {
         let mut hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
@@ -406,6 +418,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn find_returns_none_when_disabled() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .build();
+        assert_eq!(hs.find("old"), Some("oldest"));
+        hs.disabled = true;
+        assert!(hs.find("old").is_none());
+        hs.disabled = false;
+        assert_eq!(hs.find("old"), Some("older"));
+    }
+
+    #[test]
     fn find_repeated_returns_next_newer_match() {
         let mut hs = HistoryStackBuilder::new()
             .with_entries(&["oldest", "older", "old", "newest"])
@@ -465,5 +489,55 @@ pub(crate) mod tests {
         hs.rewind();
         let res = hs.find("old");
         assert_eq!(res, Some("oldest"));
+    }
+
+    #[test]
+    fn next_older_returns_none_when_disabled() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .with_index(Some(4))
+            .build();
+        assert_eq!(hs.next_older(""), Some("newest"));
+        hs.disabled = true;
+        assert!(hs.next_older("").is_none());
+        hs.disabled = false;
+        assert_eq!(hs.next_older(""), Some("old"));
+    }
+
+    #[test]
+    fn next_newer_returns_none_when_disabled() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .with_index(Some(0))
+            .build();
+        assert_eq!(hs.next_newer(), Some("older"));
+        hs.disabled = true;
+        assert!(hs.next_newer().is_none());
+        hs.disabled = false;
+        assert_eq!(hs.next_newer(), Some("old"));
+    }
+
+    #[test]
+    fn next_newer_returns_none_at_top() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .with_index(Some(3))
+            .with_draft(Some("draft"))
+            .build();
+        assert_eq!(hs.next_newer(), Some("draft"));
+        assert!(hs.next_newer().is_none());
+    }
+
+    #[test]
+    fn rewind_returns_none_when_disabled() {
+        let mut hs = HistoryStackBuilder::new()
+            .with_entries(&["oldest", "older", "old", "newest"])
+            .with_index(Some(3))
+            .with_draft(Some("draft"))
+            .build();
+        hs.disabled = true;
+        assert!(hs.rewind().is_none());
+        hs.disabled = false;
+        assert_eq!(hs.rewind(), Some("draft".to_owned()));
     }
 }

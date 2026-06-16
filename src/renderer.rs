@@ -1,9 +1,7 @@
 use std::cmp;
 use std::io;
 use std::io::Write;
-use std::ops::Add;
 use std::ops::Range;
-use std::ops::Sub;
 
 use crossterm::ExecutableCommand;
 use crossterm::QueueableCommand;
@@ -41,22 +39,6 @@ pub struct Coord2D(pub u16, pub u16);
 impl From<(u16, u16)> for Coord2D {
     fn from(v: (u16, u16)) -> Self {
         Coord2D(v.0, v.1)
-    }
-}
-
-impl Add<(u16, u16)> for Coord2D {
-    type Output = Coord2D;
-
-    fn add(self, rhs: (u16, u16)) -> Coord2D {
-        Coord2D(self.0 + rhs.0, self.1 + rhs.1)
-    }
-}
-
-impl Sub<(u16, u16)> for Coord2D {
-    type Output = Coord2D;
-
-    fn sub(self, rhs: (u16, u16)) -> Coord2D {
-        Coord2D(self.0 - rhs.0, self.1 + rhs.1)
     }
 }
 
@@ -102,10 +84,12 @@ impl View {
         }
     }
 
+    #[cfg(not(tarpaulin_include))]
     pub fn size(&self) -> DimWH {
         self.size
     }
 
+    #[cfg(not(tarpaulin_include))]
     pub fn invalidate(&mut self) {
         self.state = ViewState::Invalid;
     }
@@ -160,8 +144,10 @@ impl View {
             let unicode_cursor_offset =
                 2 + u16::try_from(unicode_cursor).expect("unicode_cursor <= 6");
             if self.cursor_position.0 >= unicode_cursor_offset {
-                self.unicode_input_position =
-                    Some(self.cursor_position - (unicode_cursor_offset, 0));
+                self.unicode_input_position = Some(Coord2D(
+                    self.cursor_position.0 - unicode_cursor_offset,
+                    self.cursor_position.1,
+                ));
             } else {
                 let prompt_width = if line_cursor_buf_line == 0 {
                     self.prompt.map_or(0, |p| char_width(p, 0))
@@ -286,6 +272,7 @@ impl View {
     }
 
     /// render current buffer to display
+    #[cfg(not(tarpaulin_include))]
     pub fn repaint(&mut self, editor: &LineEditor) -> io::Result<()> {
         let Some(scroll_lines) = self.update(editor) else {
             return Ok(());
@@ -708,6 +695,32 @@ pub(crate) mod tests {
         let mut vb = ViewBuilder::new();
         vb.with_size(DimWH(10, 5));
         let mut view = vb
+            .with_cursor_position(Coord2D(6, 3))
+            .with_first_display_line(3)
+            .with_visible_chars(0..5)
+            .build();
+
+        let expected_view = vb
+            .with_unicode_input_position(Some(Coord2D(6, 3)))
+            .with_cursor_position(Coord2D(2, 4))
+            .with_first_display_line(3)
+            .build();
+        view.invalidate();
+
+        let scroll = view.update(&editor);
+        assert_eq!(scroll, Some(0));
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn update_unicode_field_too_wide_after_cursor_past_bottom() {
+        let mut editor = LineEditor::from("abcde");
+        editor.unicode = "0308".to_owned();
+        editor.unicode_cursor = Some(4);
+
+        let mut vb = ViewBuilder::new();
+        vb.with_size(DimWH(10, 5));
+        let mut view = vb
             .with_cursor_position(Coord2D(6, 4))
             .with_first_display_line(4)
             .with_visible_chars(0..5)
@@ -724,22 +737,62 @@ pub(crate) mod tests {
         assert_eq!(scroll, Some(1));
         assert_eq!(view, expected_view);
     }
+
     #[test]
     fn resize_handles_unicode_input() {
         // Set up view with active unicode input field
         // such that resize will cause both cursor and
         // unicode_input_position to change.
         let mut editor = LineEditor::from("012345678abcde");
+        editor.line_cursor = 0;
         editor.unicode = "0308".to_owned();
         editor.unicode_cursor = Some(4);
 
         let mut vb = ViewBuilder::new();
-        vb.with_size(DimWH(15, 5)).with_visible_chars(0..14);
+        vb.with_size(DimWH(20, 5)).with_visible_chars(0..14);
         let mut view = vb
             .with_unicode_input_position(Some(Coord2D(0, 4)))
             .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .build();
+
+        let expected_view = vb
+            .with_size(DimWH(25, 5))
+            .with_unicode_input_position(Some(Coord2D(0, 4)))
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .build();
+        view.resize(DimWH(25, 5), Coord2D(6, 4), &editor);
+        assert_eq!(view, expected_view);
+
+        let expected_view = vb
+            .with_size(DimWH(10, 5))
+            .with_unicode_input_position(Some(Coord2D(1, 3)))
+            .with_cursor_position(Coord2D(1, 4))
             .with_first_display_line(3)
             .build();
+
+        view.resize(DimWH(10, 5), Coord2D(1, 4), &editor);
+        assert_eq!(view, expected_view);
+
+        let expected_view = vb
+            .with_size(DimWH(20, 5))
+            .with_unicode_input_position(Some(Coord2D(0, 4)))
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .build();
+        view.resize(DimWH(20, 5), Coord2D(6, 4), &editor);
+        assert_eq!(view, expected_view);
+
+        editor.line_cursor = editor.line.len();
+        let expected_view = vb
+            .with_size(DimWH(25, 5))
+            .with_unicode_input_position(Some(Coord2D(0, 4)))
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .build();
+        view.resize(DimWH(25, 5), Coord2D(6, 4), &editor);
+        assert_eq!(view, expected_view);
 
         let expected_view = vb
             .with_size(DimWH(10, 5))
@@ -750,5 +803,24 @@ pub(crate) mod tests {
 
         view.resize(DimWH(10, 5), Coord2D(1, 4), &editor);
         assert_eq!(view, expected_view);
+
+        let expected_view = vb
+            .with_size(DimWH(20, 5))
+            .with_unicode_input_position(Some(Coord2D(0, 4)))
+            .with_cursor_position(Coord2D(6, 4))
+            .with_first_display_line(4)
+            .build();
+        view.resize(DimWH(20, 5), Coord2D(6, 4), &editor);
+        assert_eq!(view, expected_view);
+    }
+
+    #[test]
+    fn char_width_of_tab() {
+        assert_eq!(char_width('\t', 0), 8);
+        assert_eq!(char_width('\t', 1), 7);
+        assert_eq!(char_width('\t', 2), 6);
+        assert_eq!(char_width('\t', 7), 1);
+        assert_eq!(char_width('\t', 8), 8);
+        assert_eq!(char_width('\t', 20), 4);
     }
 }

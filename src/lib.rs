@@ -163,57 +163,12 @@ impl LineEditor {
     /// # Errors
     ///
     /// Will return `io::Error` if one is encountered determining the size.
+    #[cfg(not(tarpaulin_include))]
     pub fn terminal_size() -> io::Result<(u16, u16)> {
         terminal::size()
     }
 
-    fn accept_line(
-        &mut self,
-        output_buffer: &mut String,
-        options: Option<&EditorOptions>,
-    ) -> io::Result<usize> {
-        let term_size: DimWH = Self::terminal_size()?.into();
-        let (_, first_display_line) = cursor::position()?;
-
-        // View has Drop impl to ensure terminal reset to cooked
-        // and cursor not hidden.
-        let prompt = options.and_then(|o| o.prompt);
-        let mut view = View::new(term_size, first_display_line, prompt);
-        terminal::enable_raw_mode()?;
-
-        let disable_history = !options.is_some_and(|o| o.history);
-        if let Some(history) = &mut self.history {
-            history.disabled = disable_history;
-        } else if !disable_history {
-            self.history = Some(HistoryStack::new());
-        }
-
-        if let Some(prefill) = options.and_then(|o| o.prefill.as_ref()) {
-            self.line.push_str(prefill);
-            self.line_cursor = self.line.len();
-            view.invalidate();
-        }
-
-        view.repaint(self)?;
-        while self.pump_event(&mut view)?.is_continue() {
-            view.repaint(self)?;
-        }
-
-        let _ = self.do_cursor_to_end(&mut view);
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(b"\r\n")?;
-        stdout.flush()?;
-
-        let prev_bytes = output_buffer.len();
-        output_buffer.push_str(&self.line);
-        output_buffer.push_str(native_eol());
-        self.line.clear();
-        self.line_cursor = 0;
-        let new_line_capacity = usize::from(view.size().0).next_multiple_of(64);
-        self.line.shrink_to(new_line_capacity);
-        Ok(output_buffer.len() - prev_bytes)
-    }
-
+    #[cfg(not(tarpaulin_include))]
     fn pump_event(&mut self, view: &mut View) -> io::Result<ControlFlow<()>> {
         let event = event::read()?;
         self.handle_event(view, &event)
@@ -228,22 +183,30 @@ impl LineEditor {
             Event::Key(event) if event.is_press() => {
                 Ok(self.handle_key_pressed((event.code, event.modifiers), view))
             }
-            &Event::Resize(mut w, mut h) => {
-                while let Ok(true) = event::poll(Duration::from_millis(50)) {
-                    if let Event::Resize(w1, h1) = event::read()? {
-                        (w, h) = (w1, h1);
-                    }
-                }
-                let cursor_position: Coord2D = cursor::position()?.into();
-                view.resize(DimWH(w, h), cursor_position, self);
-                Ok(ControlFlow::Continue(()))
-            }
+            Event::Resize(w, h) => self.handle_resize_event(view, *w, *h),
             Event::Key(_)
             | Event::FocusGained
             | Event::FocusLost
             | Event::Mouse(_)
             | Event::Paste(_) => Ok(ControlFlow::Continue(())),
         }
+    }
+
+    #[cfg(not(tarpaulin_include))]
+    fn handle_resize_event(
+        &mut self,
+        view: &mut View,
+        mut w: u16,
+        mut h: u16,
+    ) -> io::Result<ControlFlow<()>> {
+        while let Ok(true) = event::poll(Duration::from_millis(50)) {
+            if let Event::Resize(w1, h1) = event::read()? {
+                (w, h) = (w1, h1);
+            }
+        }
+        let cursor_position: Coord2D = cursor::position()?.into();
+        view.resize(DimWH(w, h), cursor_position, self);
+        Ok(ControlFlow::Continue(()))
     }
 
     fn handle_key_pressed(
@@ -746,12 +709,52 @@ impl LineEditor {
 }
 
 impl LineEdit for LineEditor {
+    #[cfg(not(tarpaulin_include))]
     fn accept_line(
         &mut self,
-        buffer: &mut String,
+        output_buffer: &mut String,
         options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
-        self.accept_line(buffer, options)
+        let term_size: DimWH = Self::terminal_size()?.into();
+        let (_, first_display_line) = cursor::position()?;
+
+        // View has Drop impl to ensure terminal reset to cooked
+        // and cursor not hidden.
+        let prompt = options.and_then(|o| o.prompt);
+        let mut view = View::new(term_size, first_display_line, prompt);
+        terminal::enable_raw_mode()?;
+
+        let disable_history = !options.is_some_and(|o| o.history);
+        if let Some(history) = &mut self.history {
+            history.disabled = disable_history;
+        } else if !disable_history {
+            self.history = Some(HistoryStack::new());
+        }
+
+        if let Some(prefill) = options.and_then(|o| o.prefill.as_ref()) {
+            self.line.push_str(prefill);
+            self.line_cursor = self.line.len();
+            view.invalidate();
+        }
+
+        view.repaint(self)?;
+        while self.pump_event(&mut view)?.is_continue() {
+            view.repaint(self)?;
+        }
+
+        let _ = self.do_cursor_to_end(&mut view);
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(b"\r\n")?;
+        stdout.flush()?;
+
+        let prev_bytes = output_buffer.len();
+        output_buffer.push_str(&self.line);
+        output_buffer.push_str(native_eol());
+        self.line.clear();
+        self.line_cursor = 0;
+        let new_line_capacity = usize::from(view.size().0).next_multiple_of(64);
+        self.line.shrink_to(new_line_capacity);
+        Ok(output_buffer.len() - prev_bytes)
     }
 }
 
@@ -3070,5 +3073,14 @@ mod tests {
         assert!(res.is_continue());
         assert!(view.is_valid());
         assert_eq!(editor, expected_editor);
+    }
+
+    #[test]
+    fn span_type_from_str() {
+        assert_eq!(span_type(""), SpanType::Empty);
+        assert_eq!(span_type(" starts with space"), SpanType::Space);
+        assert_eq!(span_type("$#|!"), SpanType::Symbol);
+        assert_eq!(span_type("_1_word"), SpanType::Word);
+        assert_eq!(span_type("\u{0000}"), SpanType::Other);
     }
 }
