@@ -283,9 +283,13 @@ impl LineEditor {
 
     fn do_accept_input(&mut self, view: &mut View) -> ControlFlow<()> {
         if self.unicode_cursor.is_some() {
-            let cp = u32::from_str_radix(&self.unicode, 16).unwrap();
+            let cp = if self.unicode_cursor.take() == Some(0) {
+                // Unicode field empty, set cp to invalid value
+                0x001f_ffff_u32
+            } else {
+                u32::from_str_radix(&self.unicode, 16).expect("valid hex u32")
+            };
             self.unicode.clear();
-            self.unicode_cursor = None;
             view.invalidate();
 
             return char::from_u32(cp)
@@ -2604,7 +2608,7 @@ mod tests {
         let mut view = ViewBuilder::new().build();
 
         let _ = editor.do_unicode_input_mode(&mut view);
-        view = ViewBuilder::new().build();
+        view = ViewBuilder::new().build(); // "validate" view
         assert!(editor.unicode_cursor.is_some());
 
         assert!(view.is_valid());
@@ -2619,6 +2623,26 @@ mod tests {
         assert!(editor.unicode.is_empty());
         assert!(editor.unicode_cursor.is_none());
         assert!(!view.is_valid());
+    }
+
+    #[test]
+    fn do_accept_input_nop_if_empty_unicode() {
+        let mut editor = LineEditor::from("foo");
+        let orig = editor.clone();
+        let mut view = ViewBuilder::new().build();
+        editor.unicode_cursor = Some(0);
+        assert_eq!(editor.unicode_cursor, Some(0));
+
+        assert!(view.is_valid());
+        let res = editor
+            .handle_event(
+                &mut view,
+                &Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            )
+            .expect("no error");
+
+        assert!(res.is_continue());
+        assert_eq!(editor, orig);
     }
 
     #[test]
