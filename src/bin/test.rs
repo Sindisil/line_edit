@@ -7,7 +7,7 @@ fn main() {
     let mut line = String::new();
     let mut reader = LineEditor::new();
     loop {
-        let res = reader.read_line(
+        let res = reader.accept_line(
             &mut line,
             Some(&EditorOptions { prompt: Some(':'), ..Default::default() }),
         );

@@ -46,19 +46,19 @@ use crate::renderer::View;
 ///
 /// Implementors of the `LineEdit` trait are called 'line editors'.
 ///
-/// Line editors are defined by one required method [`read_line()`].
-/// Each call to [`read_line()`] will attempt to accept input text
+/// Line editors are defined by one required method [`accept_line()`].
+/// Each call to [`accept_line()`] will attempt to accept input text
 /// characters into a provided buffer, possibly with the line editor's
 /// behavior modified by a set of specified options.
 ///
-/// [`read_line()`]: LineEdit::read_line
+/// [`accept_line()`]: LineEdit::accept_line
 pub trait LineEdit {
     /// Accept input text characters into a provided buffer,
     /// returning the number of bytes read.
     /// # Errors
     ///
     /// Will return `io::Error` if an error is encountered reading a line
-    fn read_line(
+    fn accept_line(
         &mut self,
         buffer: &mut String,
         options: Option<&EditorOptions>,
@@ -742,7 +742,7 @@ impl LineEditor {
 }
 
 impl LineEdit for LineEditor {
-    fn read_line(
+    fn accept_line(
         &mut self,
         buffer: &mut String,
         options: Option<&EditorOptions>,
@@ -755,13 +755,13 @@ impl<T> LineEdit for T
 where
     T: BufRead,
 {
-    fn read_line(
+    fn accept_line(
         &mut self,
         buffer: &mut String,
         _options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         let mut bytes = BufRead::read_line(self, buffer)?;
-        if !(buffer.ends_with("\n") || buffer.ends_with("\r\n")) {
+        if !(buffer.ends_with('\n') || buffer.ends_with("\r\n")) {
             buffer.push_str(native_eol());
             bytes += native_eol().len();
         }
@@ -1001,9 +1001,9 @@ mod tests {
     use similar_asserts::assert_eq;
 
     #[test]
-    fn can_read_line_from_bufread() {
+    fn can_accept_line_from_bufread() {
         fn read(editor: &mut impl LineEdit, buf: &mut String) {
-            editor.read_line(buf, None).unwrap();
+            editor.accept_line(buf, None).unwrap();
         }
 
         let mut input = "foo\n".as_bytes();
@@ -1013,9 +1013,9 @@ mod tests {
     }
 
     #[test]
-    fn read_line_from_bufread_ensures_newline() {
+    fn accept_line_from_bufread_ensures_newline() {
         fn read(editor: &mut impl LineEdit, buf: &mut String) {
-            editor.read_line(buf, None).unwrap();
+            editor.accept_line(buf, None).unwrap();
         }
 
         let mut input = "".as_bytes();
