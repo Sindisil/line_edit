@@ -1,3 +1,6 @@
+// Copright © 2024 Greg A. Jandl
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HistoryStack {
     pub disabled: bool,

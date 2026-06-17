@@ -1,3 +1,6 @@
+// Copyright © 2023 Greg A. Jandl
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 #![warn(missing_docs)]
 //! Terminal input with Windows style editing and optional history.
 //!

@@ -1,3 +1,6 @@
+// Copyright © 2025 Greg A. Jandl
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use std::cmp;
 use std::io;
 use std::io::Write;

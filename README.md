@@ -75,6 +75,18 @@ Issues generated with AI agents will be rejected out of hand.
 If line_edit eventually opens up to external pull requests, any pull requests
 generated with AI agents will also be rejected.
 
+# License
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Licensed under either of:
+
+* Apache License, Version 2.0
+* MIT License
+
+You may use it under either license, at your option.
+the Apache-2.0 license.
+
 **Note:**
 > line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
 References to issue numbers previous to Oct. 1, 2025 refer to issues
@@ -83,3 +95,4 @@ because at the time this library (then called line_read) was most often
 changed in lockstep with lned.
 
 
+Copyright © 2023 Greg A. Jandl
