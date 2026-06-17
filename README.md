@@ -63,31 +63,11 @@ Tab stops are currently defined as 4 spaces or one tab character ('\t').
 | Shift + F8 or Ctrl + p       | Find next newer history matching buffer |
 
 
-# Contributing:
-My policy may change in the future, but line_input is not open for pull
-requests, but I'm open to issues for bug reports and/or requests
+# Contributing
+Policy may change in the future, but for now line_input is not open for pull
+requests. I'm open to bug reports and/or requests
 (keeping in mind that it is intended to be *simple* and primarily to fit
-my particular needs.
-
-# Generative AI Policy
-
-No Generative AI has been used in the development of line_edit.
-
-Issues generated with AI agents will be rejected.
-If line_edit eventually opens up to external pull requests, any pull requests
-generated with AI agents will also be rejected.
-
-# License
-
-SPDX-License-Identifier: MIT OR Apache-2.0
-
-Licensed under either of:
-
-* Apache License, Version 2.0
-* MIT License
-
-You may use it under either license, at your option.
-the Apache-2.0 license.
+my particular needs).
 
 **Note:**
 > line_input began life as a sub-crate of [lned](https://github.com/Sindisil/lned).
@@ -96,5 +76,21 @@ within that project. I've chosen not to move the closed issues here
 because at the time this library (then called line_read) was most often
 changed in lockstep with lned.
 
+# Generative AI Policy
+No Generative AI has been used in the development of line_edit.
+
+Issues generated with AI agents will be rejected.
+If line_edit eventually opens up to external pull requests, any pull requests
+generated with AI agents will also be rejected.
+
+# License
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Licensed under either of:
+
+* [Apache License, Version 2.0](https://apache.org/licenses/LICENSE-2.0)
+* [MIT License](https://mit-license.org/)
+
+You may use it under either license, at your option.
 
 Copyright © 2023 Greg A. Jandl
