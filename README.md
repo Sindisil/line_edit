@@ -51,7 +51,7 @@ When indenting or dedenting, if the line begins with a tab ('\t'), a single
 tab will be inserted or deleted from the start of line, rather than some
 number of spaces.
 
-Tab stops are currently defined as 4 spaces.
+Tab stops are currently defined as 4 spaces or one tab character ('\t').
 
 ## History
 | Key Binding                  | Action                                  |
