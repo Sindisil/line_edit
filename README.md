@@ -71,7 +71,9 @@ my particular needs.
 
 # Generative AI Policy
 
-Issues generated with AI agents will be rejected out of hand.
+No Generative AI has been used in the development of line_edit.
+
+Issues generated with AI agents will be rejected.
 If line_edit eventually opens up to external pull requests, any pull requests
 generated with AI agents will also be rejected.
 
