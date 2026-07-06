@@ -186,6 +186,7 @@ impl LineEditor {
             Event::Key(event) if event.is_press() => {
                 Ok(self.handle_key_pressed((event.code, event.modifiers), view))
             }
+            #[cfg(not(tarpaulin_include))]
             Event::Resize(w, h) => self.handle_resize_event(view, *w, *h),
             Event::Key(_)
             | Event::FocusGained
