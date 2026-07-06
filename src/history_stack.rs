@@ -3,30 +3,42 @@
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct HistoryStack {
-    pub disabled: bool,
-    entries: Vec<String>,
+    disabled: bool,
     draft: Option<String>,
+    entries: Vec<String>,
     index: usize,
     search_cursor: Option<SearchCursor>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SearchCursor {
-    prefix: String,
     index: usize,
     order: SearchOrder,
+    prefix: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SearchOrder {
-    Older,
     Newer,
+    Older,
 }
 
 impl HistoryStack {
     #[must_use]
     pub fn new() -> HistoryStack {
         HistoryStack { ..Default::default() }
+    }
+
+    /// Disable or enable history.
+    /// State of history stack (e.g., index, draft content)
+    /// is not affected.
+    pub fn disable(&mut self, v: bool) {
+        self.disabled = v;
+    }
+
+    /// Returns true if history enabled, false if not.
+    pub fn is_enabled(&self) -> bool {
+        !self.disabled
     }
 
     /// Push a new history entry to the stack.
@@ -187,7 +199,7 @@ impl HistoryStack {
 impl From<(&str, usize, SearchOrder)> for SearchCursor {
     fn from(cursor: (&str, usize, SearchOrder)) -> Self {
         let (prefix, index, order) = (cursor.0.to_owned(), cursor.1, cursor.2);
-        SearchCursor { prefix, index, order }
+        SearchCursor { index, order, prefix }
     }
 }
 
@@ -215,7 +227,7 @@ pub(crate) mod tests {
             let index = self.index.unwrap_or(entries.len());
             let draft = self.draft.clone();
             let search_cursor = self.search_cursor.clone();
-            HistoryStack { disabled, entries, draft, index, search_cursor }
+            HistoryStack { disabled, draft, entries, index, search_cursor }
         }
 
         pub fn with_disabled(&mut self, disabled: bool) -> &mut Self {
@@ -245,7 +257,7 @@ pub(crate) mod tests {
         ) -> &mut Self {
             self.search_cursor = cursor.map(|(prefix, index, order)| {
                 let prefix = prefix.to_owned();
-                SearchCursor { prefix, index, order }
+                SearchCursor { index, order, prefix }
             });
             self
         }

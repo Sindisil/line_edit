@@ -1,5 +1,5 @@
 use line_edit::EditorOptions;
-use line_edit::LineEdit;
+use line_edit::LineEdit as _;
 use line_edit::LineEditor;
 
 #[cfg(not(tarpaulin_include))]

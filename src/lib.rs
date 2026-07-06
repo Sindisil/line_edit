@@ -25,25 +25,28 @@ mod history_stack;
 mod renderer;
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
-use std::ops::ControlFlow;
+use std::io::{self, BufRead, Write as _};
+use core::ops::ControlFlow;
 use std::sync::LazyLock;
-use std::time::Duration;
+use core::time::Duration;
 
-use crossterm::cursor::{self};
+use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 
 use regex::Regex;
 
-use unicode_segmentation::UnicodeSegmentation;
+use unicode_segmentation::UnicodeSegmentation as _;
 
-use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthChar as _;
 
 use crate::history_stack::HistoryStack;
 use crate::renderer::Coord2D;
 use crate::renderer::DimWH;
 use crate::renderer::View;
+
+static SYMBOL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[\p{S}\p{P}]").unwrap());
 
 /// The `LineEdit` trait allows for accepting a line of input text.
 ///
@@ -90,17 +93,9 @@ pub struct EditorOptions {
     /// Prompt character displayed before user input
     pub prompt: Option<char>,
     /// 'true' if line history should be enbled, false if not
-    pub history: bool,
+    pub enable_history: bool,
     /// Initial input buffer text.
     pub prefill: Option<String>,
-}
-
-/// Returns the native text line terminator sequence for the
-/// execution environment. This will be "\r\n" when called on
-/// a Windows sytem, "\n" otherwise.
-#[must_use]
-pub fn native_eol() -> &'static str {
-    if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -110,24 +105,6 @@ enum SpanType {
     Space,
     Symbol,
     Other,
-}
-
-static SYMBOL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[\p{S}\p{P}]").unwrap());
-
-fn span_type(s: &str) -> SpanType {
-    if s.is_empty() {
-        return SpanType::Empty;
-    }
-    if s.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-        SpanType::Word
-    } else if s.starts_with(char::is_whitespace) {
-        SpanType::Space
-    } else if SYMBOL.is_match(s) {
-        SpanType::Symbol
-    } else {
-        SpanType::Other
-    }
 }
 
 impl Default for LineEditor {
@@ -142,6 +119,7 @@ impl Default for LineEditor {
         }
     }
 }
+
 impl LineEditor {
     /// Creates a new `LineEditor`.
     ///
@@ -252,7 +230,7 @@ impl LineEditor {
         if self.unicode_cursor.is_some() {
             let cp = if self.unicode_cursor.take() == Some(0) {
                 // Unicode field empty, set cp to invalid value
-                0x001f_ffff_u32
+                0x001f_ffffu32
             } else {
                 u32::from_str_radix(&self.unicode, 16).expect("valid hex u32")
             };
@@ -264,7 +242,7 @@ impl LineEditor {
                     self.do_char_input(view, ch)
                 });
         } else if let Some(ref mut history) = self.history
-            && !history.disabled
+            && history.is_enabled()
         {
             history.rewind();
             if !self.line.is_empty()
@@ -728,10 +706,10 @@ impl LineEdit for LineEditor {
         let mut view = View::new(term_size, first_display_line, prompt);
         terminal::enable_raw_mode()?;
 
-        let disable_history = !options.is_some_and(|o| o.history);
+        let enable_history = options.is_some_and(|o| o.enable_history);
         if let Some(history) = &mut self.history {
-            history.disabled = disable_history;
-        } else if !disable_history {
+            history.disable(!enable_history);
+        } else if enable_history {
             self.history = Some(HistoryStack::new());
         }
 
@@ -840,7 +818,7 @@ impl KeyMap {
 }
 
 impl Default for KeyMap {
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::too_many_lines)]
     fn default() -> Self {
         let mut bindings = HashMap::new();
 
@@ -999,8 +977,32 @@ impl Default for KeyMap {
         KeyMap { bindings }
     }
 }
+
+/// Returns the native text line terminator sequence for the
+/// execution environment. This will be "\r\n" when called on
+/// a Windows sytem, "\n" otherwise.
+#[must_use]
+pub fn native_eol() -> &'static str {
+    if std::env::consts::FAMILY == "windows" { "\r\n" } else { "\n" }
+}
+
+fn span_type(s: &str) -> SpanType {
+    if s.is_empty() {
+        return SpanType::Empty;
+    }
+    if s.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+        SpanType::Word
+    } else if s.starts_with(char::is_whitespace) {
+        SpanType::Space
+    } else if SYMBOL.is_match(s) {
+        SpanType::Symbol
+    } else {
+        SpanType::Other
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::unicode_not_nfc)]
+#[expect(clippy::unicode_not_nfc)]
 mod tests {
     use super::*;
     use crate::history_stack::tests::HistoryStackBuilder;

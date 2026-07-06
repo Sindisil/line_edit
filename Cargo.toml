@@ -1,7 +1,7 @@
 [package]
 name = "line_edit"
 description = "accept a line of input (similar to read-line)"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
@@ -24,6 +24,13 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
 
 [lints.clippy]
 pedantic = "warn"
+partial_pub_fields = "warn"
+unnecessary_self_imports = "warn"
+separated_literal_suffix = "warn"
+allow_attributes = "warn"
+items_after_test_module = "warn"
+std_instead_of_core = "warn"
+unused_trait_names = "warn"
 
 [dev-dependencies]
 similar-asserts = "2.0.0"

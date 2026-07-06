@@ -1,13 +1,13 @@
 // Copyright © 2025 Greg A. Jandl
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use std::cmp;
+use core::cmp;
 use std::io;
-use std::io::Write;
-use std::ops::Range;
+use std::io::Write as _;
+use core::ops::Range;
 
-use crossterm::ExecutableCommand;
-use crossterm::QueueableCommand;
+use crossterm::ExecutableCommand as _;
+use crossterm::QueueableCommand as _;
 use crossterm::cursor::Hide;
 use crossterm::cursor::MoveTo;
 use crossterm::cursor::Show;
@@ -59,7 +59,7 @@ fn char_width(ch: char, width_before: u16) -> u16 {
     if ch == '\t' {
         8 - (width_before % 8)
     } else {
-        use unicode_width::UnicodeWidthChar;
+        use unicode_width::UnicodeWidthChar as _;
         ch.width().unwrap_or(0).try_into().expect("width is at most 2 columns")
     }
 }
