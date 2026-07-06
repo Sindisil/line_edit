@@ -772,7 +772,7 @@ where
         _options: Option<&EditorOptions>,
     ) -> io::Result<usize> {
         let mut bytes = BufRead::read_line(self, buffer)?;
-        if !(buffer.ends_with('\n') || buffer.ends_with("\r\n")) {
+        if bytes > 0 && !(buffer.ends_with('\n') || buffer.ends_with("\r\n")) {
             buffer.push_str(native_eol());
             bytes += native_eol().len();
         }
@@ -1024,15 +1024,22 @@ mod tests {
     }
 
     #[test]
-    fn accept_line_from_bufread_ensures_newline() {
-        fn read(editor: &mut impl LineEdit, buf: &mut String) {
-            editor.accept_line(buf, None).unwrap();
+    fn accept_line_from_bufread_ensures_newline_if_non_zero_len() {
+        fn read(editor: &mut impl LineEdit, buf: &mut String) -> usize {
+            editor.accept_line(buf, None).unwrap()
         }
 
         let mut input = "".as_bytes();
         let mut buf = String::new();
-        read(&mut input, &mut buf);
-        assert_eq!(&buf, native_eol());
+        let bytes_read = read(&mut input, &mut buf);
+        assert_eq!(bytes_read, 0);
+        assert!(buf.is_empty());
+
+        let mut input = "p".as_bytes();
+        let bytes_read = read(&mut input, &mut buf);
+        assert_eq!(bytes_read, 1 + native_eol().len());
+        let expected = format!("p{}", native_eol());
+        assert_eq!(buf, expected);
     }
 
     #[test]
