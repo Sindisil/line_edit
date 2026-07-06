@@ -748,7 +748,7 @@ impl LineEdit for LineEditor {
 
         let _ = self.do_cursor_to_end(&mut view);
         let mut stdout = io::stdout().lock();
-        stdout.write_all(b"\r\n")?;
+        stdout.write_all(native_eol().as_bytes())?;
         stdout.flush()?;
 
         let prev_bytes = output_buffer.len();
