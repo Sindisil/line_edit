@@ -726,7 +726,9 @@ impl LineEdit for LineEditor {
 
         let _ = self.do_cursor_to_end(&mut view);
         let mut stdout = io::stdout().lock();
-        stdout.write_all(native_eol().as_bytes())?;
+        // Write full CRLF to ensure cursor at start of next line
+        // after exit, regardless of platform.
+        stdout.write_all(b"\r\n")?;
         stdout.flush()?;
 
         let prev_bytes = output_buffer.len();
