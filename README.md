@@ -4,7 +4,7 @@ prompt character and history.
 
 # Key bindings
 
-line_input supports both Windows and Bash/emacs style key bindings
+line_input supports both Windows and Bash/Emacs style key bindings
 for editing the input line.
 
 
@@ -34,9 +34,9 @@ for editing the input line.
 
 ### Unicode input
 The Unicode input feature accepts a Unicode code point as up to six
-hexidecimal digits. Pressing Enter inserts the character specified by the
+hexadecimal digits. Pressing Enter inserts the character specified by the
 code point a the cursor position. If the code point is invalid, or input
-is canceled with Exc or Ctrl + g, no character is inserted and line_edit
+is canceled with Esc or Ctrl + g, no character is inserted and line_edit
 returns to normal editing. Most edit commands are usable during Unicode
 input, with the exception of history commands, word oriented commands, and
 indent/dedent. As mentioned, Unicode input may be canceled with Esc or
